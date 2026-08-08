@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>待辦管理</title>
+<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<style>
+  :root{
+    --bg:#FFFBEB; --card:#fff; --ink:#1C1917; --sub:#78716C;
+    --line:#E7E5E4; --accent:#B45309; --warn:#DC2626; --ok:#16A34A;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:16px/1.5 -apple-system,"Noto Sans TC",sans-serif;
+       padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+  header{padding:16px 16px 8px}
+  h1{margin:0;font-size:18px;color:var(--accent)}
+  .sub{font-size:12px;color:var(--sub);margin-top:4px}
+
+  /* 六格：兩欄三列，順序＝早上先動的在上、查看在中、維護在下 */
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:12px 16px}
+  .tile{background:var(--card);border:1px solid var(--line);border-radius:14px;
+        padding:16px 12px;text-align:center;cursor:pointer;position:relative}
+  .tile:active{background:#F5F5F4}
+  .tile .em{font-size:26px;display:block}
+  .tile .tx{font-size:14px;margin-top:6px;font-weight:600}
+  .badge{position:absolute;top:8px;right:10px;background:var(--warn);color:#fff;
+         font-size:11px;min-width:20px;padding:1px 6px;border-radius:10px}
+  .badge.zero{display:none}
+
+  #panel{padding:0 16px 24px}
+  .back{background:none;border:none;color:var(--accent);font-size:14px;padding:8px 0;cursor:pointer}
+  .item{background:var(--card);border:1px solid var(--line);border-radius:12px;
+        padding:12px;margin-bottom:10px}
+  .item h3{margin:0 0 4px;font-size:15px;font-weight:600;word-break:break-all}
+  .meta{font-size:12px;color:var(--sub)}
+  .meta.od{color:var(--warn)}
+  .btns{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+  .btn{flex:1 1 auto;min-width:72px;background:#F5F5F4;border:1px solid var(--line);
+       border-radius:8px;padding:8px 6px;font-size:13px;cursor:pointer}
+  .btn:active{background:#E7E5E4}
+  .btn.wide{flex-basis:100%}
+  .empty{color:var(--sub);font-size:14px;padding:24px 4px;text-align:center}
+  pre.msg{background:var(--card);border:1px solid var(--line);border-radius:12px;
+          padding:12px;font-size:13px;white-space:pre-wrap;word-break:break-all;
+          font-family:inherit;margin:0 0 10px}
+  #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);
+         background:#1C1917;color:#fff;padding:10px 16px;border-radius:20px;
+         font-size:14px;opacity:0;transition:.2s;pointer-events:none;max-width:90%}
+  #toast.on{opacity:.95}
+  .hide{display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>🗂 待辦管理</h1>
+  <div class="sub" id="hd">載入中…</div>
+</header>
+
+<div class="grid" id="grid"></div>
+<div id="panel" class="hide"></div>
+<div id="toast"></div>
+
+<script>
+// GAS 端點（與晨報同一支，webhook 綁定的部署）
+var GAS = 'https://script.google.com/macros/s/AKfycbwKmbZb9cjf5O3t4k1uZN9973YwGAeTflMRYq9_IiaA59kOZO1pdjkXelNLYcJYYabu_g/exec';
+var LIFF_ID = '2009829573-HqpYQNtn';   // 建立 LIFF 後由 CC 填入
+var TOKEN = null, DATA = null;
+
+function toast(t){var e=document.getElementById('toast');e.textContent=t;e.className='on';
+  setTimeout(function(){e.className='';},2200);}
+
+// JSONP：LIFF 頁跨域只能走這條（打卡頁同法）
+function api(params){
+  return new Promise(function(res,rej){
+    var cb='__cb'+Date.now()+Math.floor(Math.random()*1000);
+    var timer=setTimeout(function(){cleanup();rej(new Error('逾時'));},20000);
+    function cleanup(){clearTimeout(timer);delete window[cb];
+      var s=document.getElementById(cb);if(s)s.parentNode.removeChild(s);}
+    window[cb]=function(r){cleanup();res(r);};
+    var q=Object.keys(params).map(function(k){
+      return encodeURIComponent(k)+'='+encodeURIComponent(params[k]);}).join('&');
+    var s=document.createElement('script');
+    s.id=cb;s.src=GAS+'?action=todo_api&callback='+cb+'&token='+encodeURIComponent(TOKEN)+'&'+q;
+    s.onerror=function(){cleanup();rej(new Error('連線失敗'));};
+    document.body.appendChild(s);
+  });
+}
+
+function dueText(d){
+  if(d===undefined||d===null||d===9999) return '無到期日';
+  if(d<0) return '逾期 '+Math.abs(d)+' 天';
+  if(d===0) return '今天到期';
+  return '還有 '+d+' 天';
+}
+
+// 順序依律師 2026-08-08 指定：上排＝早上最先要動的，中排＝查看，下排＝維護
+var TILES=[
+  {k:'hl',   em:'🎯', tx:'今日 Highlight'},
+  {k:'disp', em:'📤', tx:'交辦陳律'},
+  {k:'court',em:'📅', tx:'本週庭期'},
+  {k:'dl',   em:'⏰', tx:'期限提醒', badge:function(d){return (d.deadlines||[]).length;}},
+  {k:'mng',  em:'🛠', tx:'管理任務', badge:function(d){return (d.worth||[]).length;}},
+  {k:'add',  em:'➕', tx:'新增待辦'}
+];
+
+function renderGrid(){
+  var g=document.getElementById('grid');
+  g.innerHTML=TILES.map(function(t){
+    var n=t.badge&&DATA?t.badge(DATA):0;
+    return '<div class="tile" data-k="'+t.k+'">'+
+      (t.badge?'<span class="badge'+(n?'':' zero')+'">'+n+'</span>':'')+
+      '<span class="em">'+t.em+'</span><span class="tx">'+t.tx+'</span></div>';
+  }).join('');
+  Array.prototype.forEach.call(g.querySelectorAll('.tile'),function(el){
+    el.onclick=function(){open(el.getAttribute('data-k'));};
+  });
+  document.getElementById('panel').className='hide';
+  g.className='grid';
+}
+
+function showPanel(html){
+  document.getElementById('grid').className='grid hide';
+  var p=document.getElementById('panel');
+  p.className='';
+  p.innerHTML='<button class="back" id="bk">‹ 回選單</button>'+html;
+  document.getElementById('bk').onclick=renderGrid;
+}
+
+function itemCard(t,ops){
+  return '<div class="item"><h3>'+esc(t.title)+'</h3>'+
+    '<div class="meta'+((t.days<0)?' od':'')+'">'+dueText(t.days)+'</div>'+
+    '<div class="btns">'+ops+'</div></div>';
+}
+function esc(s){return String(s).replace(/[&<>"]/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+
+function open(k){
+  if(k==='hl'){
+    var w=(DATA.worth||[]);
+    showPanel('<h2 style="font-size:16px">🎯 今日 Highlight</h2>'+
+      (w.length? w.map(function(t){return itemCard(t,
+        '<button class="btn wide" onclick="act(\'hl\',\''+t.id+'\')">⭐ 設為今日焦點</button>');}).join('')
+      : '<div class="empty">今天沒有到期、也沒有 7 天內的中高優先級任務。</div>'));
+  }
+  else if(k==='mng'){
+    var list=(DATA.worth||[]);
+    var hidden=(DATA.all||[]).length-list.length;
+    showPanel('<h2 style="font-size:16px">🛠 管理任務</h2>'+
+      (list.length? list.map(function(t){return itemCard(t,
+        '<button class="btn" onclick="act(\'done\',\''+t.id+'\')">✅ 完成</button>'+
+        '<button class="btn" onclick="defer(\''+t.id+'\')">⏰ 延後</button>'+
+        '<button class="btn" onclick="act(\'del\',\''+t.id+'\')">🗑 刪除</button>');}).join('')
+      : '<div class="empty">今天沒有需要處理的待辦。</div>')+
+      (hidden?'<button class="btn wide" onclick="showAll()">📋 顯示全部 '+(DATA.all||[]).length+' 筆（含未到期）</button>':'')+
+      ((DATA.noise||[]).length?'<button class="btn wide" style="margin-top:8px" onclick="showNoise()">🗑 清理信件殘留（'+DATA.noise.length+' 筆）</button>':''));
+  }
+  else if(k==='dl'){
+    var d=(DATA.deadlines||[]);
+    showPanel('<h2 style="font-size:16px">⏰ 期限提醒</h2>'+
+      (d.length? d.map(function(x){return '<div class="item"><h3>'+esc(x.title)+'</h3>'+
+        '<div class="meta'+((x.daysLeft<0)?' od':'')+'">'+x.label+'｜'+
+        (x.daysLeft<0?('已過期 '+Math.abs(x.daysLeft)+' 天'):(x.daysLeft===0?'今天到期':'剩 '+x.daysLeft+' 天'))+
+        '｜'+esc(x.from)+'</div><div class="btns">'+
+        '<button class="btn" onclick="dlAct(\'dl_done\',\''+x.calKey+'\',\''+x.id+'\')">✅ 已完成</button>'+
+        '<button class="btn" onclick="dlMove(\''+x.calKey+'\',\''+x.id+'\')">⏰ 改到期日</button>'+
+        '</div></div>';}).join('')
+      : '<div class="empty">沒有 7 天內到期（或過期 7 天內）的 ⏰ 期限事項。</div>'));
+  }
+  else if(k==='add'){
+    showPanel('<h2 style="font-size:16px">➕ 新增待辦</h2>'+
+      '<div class="item"><h3>要加到哪個清單？</h3><div class="btns">'+
+      '<button class="btn wide" onclick="addTo(\'personal\')">👨‍💼 個人待辦</button>'+
+      '<button class="btn wide" onclick="addTo(\'family\')">👨‍👩‍👧 家庭雜務</button>'+
+      '<button class="btn wide" onclick="addTo(\'work\')">💼 工作待辦</button>'+
+      '</div></div>');
+  }
+  else if(k==='disp'){
+    showPanel('<h2 style="font-size:16px">📤 交辦陳律</h2><div class="empty">產生中…</div>');
+    api({op:'dispatch'}).then(function(r){
+      if(!r.ok){showPanel('<div class="empty">⚠️ '+esc(r.msg||'失敗')+'</div>');return;}
+      if(!r.text){showPanel('<h2 style="font-size:16px">📤 交辦陳律</h2>'+
+        '<div class="empty">'+esc(r.msg||'今天沒有可派工的事項')+'</div>');return;}
+      showPanel('<h2 style="font-size:16px">📤 交辦陳律</h2>'+
+        '<pre class="msg" id="dsp">'+esc(r.text)+'</pre>'+
+        '<button class="btn wide" onclick="copyDisp()">📋 複製全文</button>');
+    }).catch(function(e){toast('⚠️ '+e.message);});
+  }
+  else if(k==='court'){
+    showPanel('<h2 style="font-size:16px">📅 本週庭期</h2>'+
+      '<div class="empty">庭期資料由晨報正文提供，此格待接。</div>');
+  }
+}
+
+function showAll(){
+  showPanel('<h2 style="font-size:16px">📋 全部待辦</h2>'+
+    (DATA.all||[]).map(function(t){return itemCard(t,
+      '<button class="btn" onclick="act(\'done\',\''+t.id+'\')">✅ 完成</button>'+
+      '<button class="btn" onclick="defer(\''+t.id+'\')">⏰ 延後</button>'+
+      '<button class="btn" onclick="act(\'del\',\''+t.id+'\')">🗑 刪除</button>');}).join(''));
+}
+function showNoise(){
+  showPanel('<h2 style="font-size:16px">🗑 信件殘留</h2>'+
+    '<div class="sub" style="margin-bottom:10px">被灌進待辦的信件主旨／網頁標題。真的要做就改標題，純資訊就刪除（進 Notion 垃圾桶可還原）。</div>'+
+    (DATA.noise||[]).map(function(t){return itemCard(t,
+      '<button class="btn" onclick="retitle(\''+t.id+'\')">✏️ 改成待辦</button>'+
+      '<button class="btn" onclick="act(\'del\',\''+t.id+'\')">🗑 刪除</button>');}).join(''));
+}
+
+function copyDisp(){
+  var t=document.getElementById('dsp').textContent;
+  if(navigator.clipboard) navigator.clipboard.writeText(t).then(function(){toast('已複製，可直接貼給陳律');});
+  else toast('請長按上方文字複製');
+}
+function addTo(db){
+  var t=prompt('要新增什麼待辦？');
+  if(!t) return;
+  api({op:'add',db:db,title:t}).then(after).catch(function(e){toast('⚠️ '+e.message);});
+}
+function retitle(id){
+  var t=prompt('新標題（短一點，例如「XPEL 車漆養護」）');
+  if(!t) return;
+  api({op:'retitle',id:id,title:t}).then(after).catch(function(e){toast('⚠️ '+e.message);});
+}
+function defer(id){
+  var d=prompt('延到哪一天？（YYYY-MM-DD）', new Date(Date.now()+864e5).toISOString().slice(0,10));
+  if(!d) return;
+  api({op:'defer',id:id,date:d}).then(after).catch(function(e){toast('⚠️ '+e.message);});
+}
+function dlMove(cal,id){
+  var d=prompt('改到哪一天？（YYYY-MM-DD）', new Date(Date.now()+7*864e5).toISOString().slice(0,10));
+  if(!d) return;
+  api({op:'dl_move',cal:cal,id:id,date:d}).then(after).catch(function(e){toast('⚠️ '+e.message);});
+}
+function dlAct(op,cal,id){ api({op:op,cal:cal,id:id}).then(after).catch(function(e){toast('⚠️ '+e.message);}); }
+function act(op,id){
+  if(op==='hl'){toast('請到 LINE 卡片設定 Highlight');return;}
+  api({op:op,id:id}).then(after).catch(function(e){toast('⚠️ '+e.message);});
+}
+function after(r){
+  toast((r.ok?'✅ ':'⚠️ ')+(r.msg||(r.ok?'完成':'失敗')));
+  return load().then(renderGrid);
+}
+
+function load(){
+  return api({op:'list'}).then(function(r){
+    if(!r.ok){document.getElementById('hd').textContent='⚠️ '+(r.msg||'讀取失敗');return;}
+    DATA=r;
+    document.getElementById('hd').textContent=
+      (r.mode==='holiday'?'假日模式':'平日模式')+'｜需處理 '+(r.worth||[]).length+
+      ' 筆・全部 '+(r.all||[]).length+' 筆';
+  });
+}
+
+(async function(){
+  try{ await liff.init({liffId:LIFF_ID}); }
+  catch(e){ document.getElementById('hd').textContent='⚠️ LIFF 初始化失敗：'+(e.message||e); return; }
+  if(!liff.isLoggedIn()){ liff.login(); return; }
+  TOKEN = liff.getAccessToken();
+  try{ await load(); renderGrid(); }
+  catch(e){ document.getElementById('hd').textContent='⚠️ '+(e.message||e); }
+})();
+</script>
+</body>
+</html>
