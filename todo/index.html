@@ -188,8 +188,19 @@ function open(k){
     }).catch(function(e){toast('⚠️ '+e.message);});
   }
   else if(k==='court'){
-    showPanel('<h2 style="font-size:16px">📅 本週庭期</h2>'+
-      '<div class="empty">庭期資料由晨報正文提供，此格待接。</div>');
+    showPanel('<h2 style="font-size:16px">📅 本週庭期</h2><div class="empty">讀取中…</div>');
+    api({op:'court'}).then(function(r){
+      if(!r.ok){showPanel('<h2 style="font-size:16px">📅 本週庭期</h2>'+
+        '<div class="empty">⚠️ '+esc(r.msg||'讀取失敗')+'</div>');return;}
+      var ev=r.events||[];
+      showPanel('<h2 style="font-size:16px">📅 本週庭期</h2>'+
+        '<div class="sub" style="margin-bottom:10px">本週（'+esc(r.weekOf)+' 起）週一至週五</div>'+
+        (ev.length? ev.map(function(x){
+          return '<div class="item"><h3>'+esc(x.title)+'</h3>'+
+            '<div class="meta">'+esc(x.date)+(x.allDay?'（全日）':(x.time?' '+esc(x.time):''))+
+            (x.location?'｜'+esc(x.location):'')+'</div></div>';}).join('')
+        : '<div class="empty">本週無庭期。</div>'));
+    }).catch(function(e){toast('⚠️ '+e.message);});
   }
 }
 
@@ -243,6 +254,17 @@ function after(r){
   return load().then(renderGrid);
 }
 
+// Rich menu 每格帶 ?k=<TILES 的 key> 進來，載完直接開那一格，
+// 不要先停在六格首頁再讓律師點第二次——選單本來就是為了少一次點擊。
+// LINE 從 liff.line.me/{id}?k=hl 轉進 endpoint 時，參數可能原樣留在 query，
+// 也可能被包進 liff.state（LIFF 兩種轉址行為都出現過），兩邊都要看。
+function deepLink(){
+  var q=new URLSearchParams(location.search), k=q.get('k');
+  if(!k){ var st=q.get('liff.state');
+    if(st) k=new URLSearchParams(st.charAt(0)==='?'?st.slice(1):st).get('k'); }
+  if(k&&TILES.some(function(t){return t.k===k;})) open(k);
+}
+
 function load(){
   return api({op:'list'}).then(function(r){
     if(!r.ok){document.getElementById('hd').textContent='⚠️ '+(r.msg||'讀取失敗');return;}
@@ -258,7 +280,7 @@ function load(){
   catch(e){ document.getElementById('hd').textContent='⚠️ LIFF 初始化失敗：'+(e.message||e); return; }
   if(!liff.isLoggedIn()){ liff.login(); return; }
   TOKEN = liff.getAccessToken();
-  try{ await load(); renderGrid(); }
+  try{ await load(); renderGrid(); deepLink(); }
   catch(e){ document.getElementById('hd').textContent='⚠️ '+(e.message||e); }
 })();
 </script>
