@@ -155,8 +155,9 @@ function renderRound(m, key, r){
     say.appendChild(el('b',null, pending ? '有 '+pending+' 則要你回' : '要回的都處理好了'));
     say.appendChild(document.createTextNode(pending ? '。草稿可以直接改字，按「複製」到 LINE 貼上。' : '。'));
   } else {
-    say.textContent = lead + (n ? '，沒有需要你回的。' : '。');
-    say.className = 'say quiet';
+    var unfinished = r.result && r.result !== 'done' && r.result !== 'no_unread';
+    say.textContent = lead + (unfinished ? '，' + (RESULT[r.result] || r.result) + '。' : (n ? '，沒有需要你回的。' : '。'));
+    say.className = unfinished ? 'say' : 'say quiet';   // 沒做完的輪次不能說成「沒有要回的」（Codex 審 b75099a9）
   }
   turn.appendChild(say);
   drafts.forEach(function(d){ turn.appendChild(draftCard(d)); });
@@ -225,15 +226,21 @@ function renderTasks(m){
     tx.appendChild(el('div','time',t)); tx.appendChild(el('small',null,'每天：看 LINE 綠點、點開讀訊息、擬回覆草稿'));
     it.appendChild(tx);
     var x = el('button','x','×'); x.setAttribute('aria-label','刪除 '+t);
-    x.onclick = function(){ if(slots.length<=1){ toast('至少要留一個時段'); return; } save('slots', slots.filter(function(v){return v!==t;}).join(',')); };
+    x.onclick = function(){
+      var cur = (DATA.settings.slots || slots).slice();   // 用按下當時最新的設定算，不用畫面重繪前的舊清單（Codex 審 b75099a9）
+      if(cur.length<=1){ toast('至少要留一個時段'); return; }
+      save('slots', cur.filter(function(v){return v!==t;}).join(','));
+    };
     it.appendChild(x); list.appendChild(it);
   });
   var add = el('div','add'); var inp = el('input'); inp.type='time'; inp.value=NEWSLOT;
   inp.oninput = function(){ NEWSLOT = inp.value; };
   var b = el('button','pill alt','新增'); b.onclick = function(){
+    var cur = (DATA.settings.slots || slots).slice();
     if(!/^\d{2}:\d{2}$/.test(NEWSLOT)){ toast('先選時間'); return; }
-    if(slots.indexOf(NEWSLOT)>=0){ toast('已經有這個時段'); return; }
-    var sent = NEWSLOT; save('slots', slots.concat([sent]).sort().join(',')).then(function(done){ if(done && NEWSLOT === sent) NEWSLOT=''; });
+    if(cur.indexOf(NEWSLOT)>=0){ toast('已經有這個時段'); return; }
+    var sent = NEWSLOT;
+    save('slots', cur.concat([sent]).sort().join(','), function(){ if(NEWSLOT === sent) NEWSLOT=''; });   // 先清再重繪，輸入框與狀態一致
   };
   add.appendChild(inp); add.appendChild(b); list.appendChild(add); m.appendChild(list);
 
@@ -254,8 +261,15 @@ function sw(name, label, hint){
   it.appendChild(b); return it;
 }
 
+function header(){
+  var st = DATA && DATA.state, pend = 0;
+  Object.values((st&&st.rounds)||{}).forEach(function(x){ (x.drafts||[]).forEach(function(d){ if(!d.decision) pend++; }); });
+  document.getElementById('hd').textContent = (st && st.day ? st.day : '尚無紀錄') + (pend ? '・'+pend+' 則待回' : '');
+}
+
 function render(){
   var m = document.getElementById('main'); m.textContent='';
+  if(DATA) header();   // 待回數每次重繪都重算（Codex 審 b75099a9：按完頁首還寫 1 則待回）
   document.getElementById('back').style.visibility = VIEW==='tasks' ? 'visible' : 'hidden';
   document.getElementById('tasks').style.visibility = VIEW==='tasks' ? 'hidden' : 'visible';
   document.getElementById('ttl').textContent = VIEW==='tasks' ? '例行任務' : 'Claude Bot';
@@ -263,13 +277,18 @@ function render(){
   if(VIEW==='tasks') renderTasks(m); else renderChat(m);
 }
 
-async function save(name, value){
+var SAVING = false;
+async function save(name, value, onOk){
+  if(SAVING){ toast('上一個變更還在存，稍等一下'); return false; }   // 一次只送一個變更：連續刪除不會拿舊清單覆蓋
+  SAVING = true;
   try{
     var r = await api({op:'set', name:name, value:value});
     if(!r.ok){ toast('沒存成：'+(r.msg==='bad setting'?'格式不對':r.msg)); return false; }
     if(!DATA.settings || (r.settings.rev||0) >= (DATA.settings.rev||0)) DATA.settings = r.settings;
+    if(onOk) onOk();
     render(); toast('已存，下一輪生效'); return true;
   }catch(e){ toast('連線失敗，請再按一次'); return false; }
+  finally{ SAVING = false; }
 }
 
 async function decide(d, decision, copied){
@@ -286,9 +305,7 @@ async function decide(d, decision, copied){
 async function load(){
   var r = await api({op:'state'});
   if(!r.ok){ document.getElementById('hd').textContent=(r.msg==='forbidden'?'只有王律師本人可以看':r.msg||'讀取失敗'); return false; }
-  DATA = r; var st = r.state;
-  var pend = 0; Object.values((st&&st.rounds)||{}).forEach(function(x){ (x.drafts||[]).forEach(function(d){ if(!d.decision) pend++; }); });
-  document.getElementById('hd').textContent = (st && st.day ? st.day : '尚無紀錄') + (pend ? '・'+pend+' 則待回' : '');
+  DATA = r;
   return true;
 }
 
