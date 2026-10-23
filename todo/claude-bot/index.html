@@ -89,7 +89,7 @@ var RESULT = {done:['完成','ok'], no_unread:['沒有未讀','ok'], partial:['�
 function renderToday(m){
   var st = DATA.state;
   if(!st || !st.rounds || !Object.keys(st.rounds).length){ m.appendChild(el('div','empty','今天還沒有跑過')); return; }
-  Object.keys(st.rounds).sort().forEach(function(k){
+  Object.keys(st.rounds).sort(function(x,y){ var a=(st.rounds[x].at||'')+x, b=(st.rounds[y].at||'')+y; return a<b?-1:a>b?1:0; })   /* 照執行時間排，過午夜的輪次排在後面 */.forEach(function(k){
     var r = st.rounds[k], card = el('div','msg');
     var lab = RESULT[r.result] || [r.result,''];
     card.appendChild(el('div','t', k+' 這一輪｜'+(r.at||'').slice(11,16)+' 執行'));

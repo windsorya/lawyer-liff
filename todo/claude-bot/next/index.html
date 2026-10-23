@@ -201,7 +201,7 @@ function renderChat(m){
   var st = DATA.state;
   if(!st || !st.rounds || !Object.keys(st.rounds).length){ m.appendChild(el('div','empty','今天還沒有跑過')); return; }
   // 主角是要回的草稿：沒有草稿的輪次併成一行（可展開），有草稿的輪次照時間排在下面
-  var keys = Object.keys(st.rounds).sort();
+  var keys = Object.keys(st.rounds).sort(function(x,y){ var a=(st.rounds[x].at||'')+x, b=(st.rounds[y].at||'')+y; return a<b?-1:a>b?1:0; })   /* 照執行時間排，過午夜的輪次排在後面 */;
   var quiet = keys.filter(function(k){ return !(st.rounds[k].drafts||[]).length; });
   var loud = keys.filter(function(k){ return (st.rounds[k].drafts||[]).length; });
   if(quiet.length){
