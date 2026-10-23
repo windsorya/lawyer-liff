@@ -117,7 +117,8 @@ function api(params){
 }
 
 /** 同步複製（必須在點擊當下呼叫，不得在 await 之後）：textarea＋execCommand（iOS LINE 內建瀏覽器可用），再補 navigator.clipboard。 */
-function copyText(text){
+function copyText(text, done){
+  // 回報的是「真的複製成功了沒」：execCommand 失敗才用 clipboard API，而它是 Promise，要等結果（Codex 審 f9517dda）
   var ok = false;
   try{
     var ta = document.createElement('textarea');
@@ -125,8 +126,11 @@ function copyText(text){
     document.body.appendChild(ta); ta.focus(); ta.select(); ta.setSelectionRange(0, text.length);
     ok = document.execCommand('copy'); document.body.removeChild(ta);
   }catch(e){ ok = false; }
-  if(!ok && navigator.clipboard && navigator.clipboard.writeText){ try{ navigator.clipboard.writeText(text); ok = true; }catch(e2){} }
-  return ok;
+  if(ok){ done(true); return; }
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    try{ navigator.clipboard.writeText(text).then(function(){ done(true); }, function(){ done(false); }); return; }catch(e2){}
+  }
+  done(false);
 }
 
 var RESULT = {done:'看完了', no_unread:'沒有未讀', partial:'還有幾間沒看完，稍後補', wait:'等你離開電腦再看',
@@ -179,13 +183,13 @@ function draftCard(d){
     var done = el('div','done'+(d.decision==='ok'?'':' no'));
     done.appendChild(el('span',null, d.decision==='ok' ? '✓ 已回'+(d.decided_at?'（'+hm(d.decided_at)+'）':'') : (d.decision==='no'?'標記為不用回':'卡片對不上，未採用')));
     var again = el('button','link','複製');
-    again.onclick = function(){ toast(copyText(ta.value) ? '已複製，到 LINE 貼上即可' : '複製失敗，請長按文字複製'); };
+    again.onclick = function(){ copyText(ta.value, function(c){ toast(c ? '已複製，到 LINE 貼上即可' : '複製失敗，請長按文字複製'); }); };
     done.appendChild(again); c.appendChild(done);
   } else if(d.card_id){
     var acts = el('div','acts');
     var ok = el('button','pill main','複製並標記已回'), no = el('button','pill alt','不用回');
     // 複製必須在點擊當下同步做（iOS／LINE 內建瀏覽器只准使用者手勢內寫剪貼簿）
-    ok.onclick = function(){ var cp = copyText(ta.value); decide(d, 'ok', cp); };
+    ok.onclick = function(){ copyText(ta.value, function(cp){ decide(d, 'ok', cp); }); };
     no.onclick = function(){ decide(d, 'no'); };
     acts.appendChild(ok); acts.appendChild(no); c.appendChild(acts);
   }
@@ -229,7 +233,7 @@ function renderTasks(m){
   var b = el('button','pill alt','新增'); b.onclick = function(){
     if(!/^\d{2}:\d{2}$/.test(NEWSLOT)){ toast('先選時間'); return; }
     if(slots.indexOf(NEWSLOT)>=0){ toast('已經有這個時段'); return; }
-    save('slots', slots.concat([NEWSLOT]).sort().join(',')).then(function(done){ if(done) NEWSLOT=''; });
+    var sent = NEWSLOT; save('slots', slots.concat([sent]).sort().join(',')).then(function(done){ if(done && NEWSLOT === sent) NEWSLOT=''; });
   };
   add.appendChild(inp); add.appendChild(b); list.appendChild(add); m.appendChild(list);
 

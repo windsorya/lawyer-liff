@@ -106,7 +106,7 @@ function renderToday(m){
       if(d.decision){
         box.appendChild(el('div','t', d.decision==='ok' ? '你按了送出・'+(d.send||'') : (d.decision==='no'?'你按了不要':'卡片對不上，未採用')));
         if(d.decision==='ok'){ var cb = el('div','bar'), cp = el('button','btn ghost','複製全文');
-          cp.onclick=function(){ toast(copyText(d.draft) ? '已複製，到 LINE 貼上即可' : '複製失敗，請長按草稿複製'); };
+          cp.onclick=function(){ copyText(d.draft, function(c){ toast(c ? '已複製，到 LINE 貼上即可' : '複製失敗，請長按草稿複製'); }); };
           cb.appendChild(cp); box.appendChild(cb); }
       }
       else if(d.card_id){
@@ -114,7 +114,7 @@ function renderToday(m){
         var ok = el('button','btn','送出'), no = el('button','btn ghost','不要');
         // 送出＝記下決定＋同時複製全文（律師 10-24：「為何點送出時，不能同時複製全文？很不方便」）。
         // 複製必須在點擊當下同步做：iOS／LINE 內建瀏覽器只准使用者手勢內寫剪貼簿，await 之後就不准了。
-        ok.onclick=function(){ var c = copyText(d.draft); decide(d, 'ok', c); }; no.onclick=function(){ decide(d, 'no'); };
+        ok.onclick=function(){ copyText(d.draft, function(c){ decide(d, 'ok', c); }); }; no.onclick=function(){ decide(d, 'no'); };
         bar.appendChild(ok); bar.appendChild(no); box.appendChild(bar);
         box.appendChild(el('div','t','代送尚未開放：按「送出」會記下決定並複製全文，到 LINE 貼上即可'));
       }
@@ -145,7 +145,7 @@ function renderTasks(m){
   var wrap = el('div'); var inp = el('input'); inp.type='text';
   inp.value = SLOTS_DRAFT!=null ? SLOTS_DRAFT : (s.slots||['10:00','16:00','21:00']).join(',');
   inp.oninput = function(){ SLOTS_DRAFT = inp.value; };   // 還沒按「存」的字，重繪時不清掉（Codex 審 01212ada）
-  var ok = el('button','btn','存'); ok.onclick=function(){ save('slots', inp.value).then(function(done){ if(done) SLOTS_DRAFT = null; }); };
+  var ok = el('button','btn','存'); ok.onclick=function(){ var sent = inp.value; save('slots', sent).then(function(done){ if(done && SLOTS_DRAFT === sent) SLOTS_DRAFT = null; }); };   // 存檔期間又改的字不清掉（Codex 審 f9517dda）
   wrap.appendChild(inp); wrap.appendChild(ok); box.appendChild(wrap); card.appendChild(box);
   card.appendChild(sw('auto_like','自動按讚','點開聊天室時，對生日、喜事、升任、得獎這類貼文當場按讚'));
   card.appendChild(sw('drafts','擬回覆草稿','只產生草稿給你看，不會自動送出'));
@@ -172,7 +172,8 @@ async function save(name, value){
 }
 
 /** 同步複製（不得在 await 之後呼叫）：先試 textarea＋execCommand（iOS LINE 內建瀏覽器可用），再補 navigator.clipboard。 */
-function copyText(text){
+function copyText(text, done){
+  // 回報的是「真的複製成功了沒」：execCommand 失敗才用 clipboard API，而它是 Promise，要等結果（Codex 審 f9517dda）
   var ok = false;
   try{
     var ta = document.createElement('textarea');
@@ -180,8 +181,11 @@ function copyText(text){
     document.body.appendChild(ta); ta.focus(); ta.select(); ta.setSelectionRange(0, text.length);
     ok = document.execCommand('copy'); document.body.removeChild(ta);
   }catch(e){ ok = false; }
-  if(!ok && navigator.clipboard && navigator.clipboard.writeText){ try{ navigator.clipboard.writeText(text); ok = true; }catch(e2){} }
-  return ok;
+  if(ok){ done(true); return; }
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    try{ navigator.clipboard.writeText(text).then(function(){ done(true); }, function(){ done(false); }); return; }catch(e2){}
+  }
+  done(false);
 }
 
 async function decide(d, decision, copied){
