@@ -4,6 +4,19 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>待辦管理</title>
+<script>
+// Claude Bot（同一個 LIFF app 的子頁 todo/claude-bot/）：liff.line.me/<id>/claude-bot/ 會先落在本頁，
+// 帶 ?liff.state=/claude-bot/。不等本頁初始化（2026-10-23 22:03 律師實機：卡在「載入中…」），直接轉過去。
+(function(){
+  try{
+    var st = new URLSearchParams(location.search).get('liff.state') || '';
+    if (st.indexOf('/claude-bot') === 0) {
+      var base = location.pathname.replace(/\/?$/, '/');
+      location.replace(base + 'claude-bot/' + (location.hash || ''));
+    }
+  }catch(e){}
+})();
+</script>
 <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 <style>
   :root{
