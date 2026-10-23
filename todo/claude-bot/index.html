@@ -39,6 +39,8 @@
   .btn{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:8px 12px;font:inherit;font-size:14px}
   .draft{border-top:1px solid var(--line);padding:8px 0}
   .dtext{background:#09090B;border-radius:10px;padding:10px;font-size:15px;-webkit-user-select:text;user-select:text}
+  .bar{display:flex;gap:8px;margin-top:8px}
+  .btn.ghost{background:#27272A;color:var(--ink)}
   .empty{color:var(--sub);text-align:center;padding:30px 0}
   #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#fff;color:#000;padding:8px 14px;border-radius:99px;font-size:14px;opacity:0;transition:opacity .2s}
   #toast.on{opacity:1}
@@ -100,7 +102,16 @@ function renderToday(m){
     });
     (r.drafts||[]).forEach(function(d){
       var box = el('div','draft'); box.appendChild(el('div','t','回覆草稿・'+d.chat+'（不會自動送出，長按可複製）'));
-      box.appendChild(el('div','dtext',d.draft)); card.appendChild(box);
+      box.appendChild(el('div','dtext',d.draft));
+      if(d.decision){ box.appendChild(el('div','t', d.decision==='ok' ? '你按了送出・'+(d.send||'') : (d.decision==='no'?'你按了不要':'卡片對不上，未採用'))); }
+      else if(d.card_id){
+        var bar = el('div','bar');
+        var ok = el('button','btn','送出'), no = el('button','btn ghost','不要');
+        ok.onclick=function(){ decide(d, 'ok'); }; no.onclick=function(){ decide(d, 'no'); };
+        bar.appendChild(ok); bar.appendChild(no); box.appendChild(bar);
+        box.appendChild(el('div','t','代送尚未開放：按「送出」只會記下你的決定，請自行複製貼上'));
+      }
+      card.appendChild(box);
     });
     var sk = r.skipped_counts || {};
     Object.keys(sk).forEach(function(why){
@@ -145,6 +156,16 @@ async function save(name, value){
     var r = await api({op:'set', name:name, value:value});
     if(!r.ok){ toast('沒存成：'+(r.msg==='bad setting'?'格式不對':r.msg)); return; }
     DATA.settings = r.settings; render(); toast('已存，下一次巡查生效');
+  }catch(e){ toast('連線失敗，請再按一次'); }
+}
+
+async function decide(d, decision){
+  try{
+    var r = await api({op:'decide', card:d.card_id, decision:decision});
+    if(!r.ok){ toast('沒記成：'+(r.msg||'')); return; }
+    d.decision = (r.already||r.recorded).decision;
+    if(d.decision==='ok') d.send='已記下，下一次巡查時同步';
+    render(); toast(r.already ? '這則先前已按過，以那次為準' : '已記下');
   }catch(e){ toast('連線失敗，請再按一次'); }
 }
 
