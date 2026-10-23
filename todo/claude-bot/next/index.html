@@ -150,13 +150,14 @@ function renderRound(m, key, r){
   var say = el('div','say');
   var n = opened.length || r.opened_count || 0;
   var lead = n ? '這一輪看了 '+n+' 間' : (RESULT[r.result] || '這一輪沒有點開聊天室');
+  var unfinished = r.result && r.result !== 'done' && r.result !== 'no_unread';
+  if(unfinished && n) lead += '（' + (RESULT[r.result] || r.result) + '）';   // 沒做完一定要講，有沒有草稿都一樣（Codex 審 d39de488）
   if(drafts.length){
     say.appendChild(document.createTextNode(lead+'，'));
     say.appendChild(el('b',null, pending ? '有 '+pending+' 則要你回' : '要回的都處理好了'));
     say.appendChild(document.createTextNode(pending ? '。草稿可以直接改字，按「複製」到 LINE 貼上。' : '。'));
   } else {
-    var unfinished = r.result && r.result !== 'done' && r.result !== 'no_unread';
-    say.textContent = lead + (unfinished ? '，' + (RESULT[r.result] || r.result) + '。' : (n ? '，沒有需要你回的。' : '。'));
+    say.textContent = lead + (unfinished ? '，目前還沒有要你回的。' : (n ? '，沒有需要你回的。' : '。'));
     say.className = unfinished ? 'say' : 'say quiet';   // 沒做完的輪次不能說成「沒有要回的」（Codex 審 b75099a9）
   }
   turn.appendChild(say);
@@ -202,8 +203,10 @@ function renderChat(m){
   if(!st || !st.rounds || !Object.keys(st.rounds).length){ m.appendChild(el('div','empty','今天還沒有跑過')); return; }
   // 主角是要回的草稿：沒有草稿的輪次併成一行（可展開），有草稿的輪次照時間排在下面
   var keys = Object.keys(st.rounds).sort(function(x,y){ var a=(st.rounds[x].at||'')+x, b=(st.rounds[y].at||'')+y; return a<b?-1:a>b?1:0; })   /* 照執行時間排，過午夜的輪次排在後面 */;
-  var quiet = keys.filter(function(k){ return !(st.rounds[k].drafts||[]).length; });
-  var loud = keys.filter(function(k){ return (st.rounds[k].drafts||[]).length; });
+  function done(k){ var x = st.rounds[k].result; return !x || x === 'done' || x === 'no_unread'; }
+  // 收合的只有「做完了、又沒有草稿」的輪次；沒做完的一律攤開（Codex 審 d39de488：partial 被藏進收合）
+  var quiet = keys.filter(function(k){ return !(st.rounds[k].drafts||[]).length && done(k); });
+  var loud = keys.filter(function(k){ return quiet.indexOf(k) < 0; });
   if(quiet.length){
     var t = el('div','turn'), det = el('details');
     var seen = quiet.reduce(function(a,k){ return a + ((st.rounds[k].opened||[]).length || st.rounds[k].opened_count || 0); }, 0);
@@ -212,7 +215,8 @@ function renderChat(m){
     t.appendChild(det); m.appendChild(t);
   }
   loud.forEach(function(k){ renderRound(m, k, st.rounds[k]); });
-  if(!loud.length) m.appendChild(el('div','empty','目前沒有要你回的'));
+  var pend = 0; keys.forEach(function(k){ (st.rounds[k].drafts||[]).forEach(function(d){ if(!d.decision) pend++; }); });
+  if(!pend && keys.every(done)) m.appendChild(el('div','empty','目前沒有要你回的'));
   m.appendChild(el('div','foot','更新於 '+(st.pushedAt||'—').replace('T',' ')));
 }
 
