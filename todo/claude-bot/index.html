@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Claude Bot</title>
+<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<style>
+  /* 版面仿 Grok Bot：深色、對話式日報、例行任務設定（律師 2026-10-23「設定的介面可以參考 Grok bot 的介面」） */
+  :root{
+    --bg:#0B0B0C; --card:#17171A; --ink:#F4F4F5; --sub:#A1A1AA;
+    --line:#27272A; --accent:#D97757; --ok:#22C55E; --warn:#F59E0B;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:16px/1.55 -apple-system,"Noto Sans TC",sans-serif;
+       padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+  header{display:flex;align-items:center;gap:10px;padding:16px;border-bottom:1px solid var(--line)}
+  .logo{width:36px;height:36px;border-radius:50%;background:var(--accent);display:grid;place-items:center;font-weight:700}
+  h1{margin:0;font-size:18px}
+  .sub{font-size:12px;color:var(--sub)}
+  nav{display:flex;gap:4px;padding:8px 12px;border-bottom:1px solid var(--line)}
+  nav button{flex:1;background:none;border:0;color:var(--sub);font:inherit;font-size:14px;padding:8px;border-radius:8px}
+  nav button.on{background:var(--card);color:var(--ink)}
+  main{padding:12px 16px 40px}
+  .msg{background:var(--card);border-radius:14px;padding:12px 14px;margin:10px 0}
+  .msg .t{font-size:12px;color:var(--sub);margin-bottom:4px}
+  .row{display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-top:1px solid var(--line);font-size:14px}
+  .row:first-of-type{border-top:0}
+  .tag{font-size:12px;padding:1px 8px;border-radius:99px;background:#27272A;color:var(--sub);white-space:nowrap}
+  .tag.ok{color:var(--ok)} .tag.warn{color:var(--warn)}
+  .set{display:flex;justify-content:space-between;align-items:center;padding:14px 0;border-top:1px solid var(--line)}
+  .set:first-child{border-top:0}
+  .set small{display:block;color:var(--sub);font-size:12px}
+  .sw{width:50px;height:30px;border-radius:99px;background:#3F3F46;position:relative;border:0;flex:none}
+  .sw::after{content:"";position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;background:#fff;transition:left .15s}
+  .sw.on{background:var(--ok)} .sw.on::after{left:23px}
+  input[type=text]{background:#09090B;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:8px;font:inherit;width:150px}
+  .btn{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:8px 12px;font:inherit;font-size:14px}
+  .empty{color:var(--sub);text-align:center;padding:30px 0}
+  #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#fff;color:#000;padding:8px 14px;border-radius:99px;font-size:14px;opacity:0;transition:opacity .2s}
+  #toast.on{opacity:1}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">C</div>
+  <div><h1>Claude Bot</h1><div class="sub" id="hd">讀取中…</div></div>
+</header>
+<nav>
+  <button id="tab-today" class="on">今天</button>
+  <button id="tab-tasks">例行任務</button>
+</nav>
+<main id="main"></main>
+<div id="toast"></div>
+
+<script>
+// 資料端：晨報同一支 GAS（gas/morning-briefing/claude-bot.js）。本頁在 public repo，不放任何憑證；
+// 身分＝LIFF token → GAS 打 LINE /v2/profile 比對律師 userId。所有字串一律用 textContent 放進畫面（不拼 HTML）。
+var GAS = 'https://script.google.com/macros/s/AKfycbwKmbZb9cjf5O3t4k1uZN9973YwGAeTflMRYq9_IiaA59kOZO1pdjkXelNLYcJYYabu_g/exec';
+var LIFF_ID = '2009829573-HqpYQNtn';   // 晨報待辦 LIFF app；本頁是它 endpoint 的子路徑 todo/claude-bot/
+var TOKEN = null, DATA = null, TAB = 'today';
+
+function toast(t){var e=document.getElementById('toast');e.textContent=t;e.className='on';setTimeout(function(){e.className='';},2200);}
+function el(tag, cls, text){var e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e;}
+
+function api(params){
+  return new Promise(function(res,rej){
+    var cb='__cb'+Date.now()+Math.floor(Math.random()*1000);
+    var timer=setTimeout(function(){cleanup();rej(new Error('逾時'));},20000);
+    function cleanup(){clearTimeout(timer);delete window[cb];var s=document.getElementById(cb);if(s)s.parentNode.removeChild(s);}
+    window[cb]=function(r){cleanup();res(r);};
+    var q=Object.keys(params).map(function(k){return encodeURIComponent(k)+'='+encodeURIComponent(params[k]);}).join('&');
+    var s=document.createElement('script');
+    s.id=cb;s.src=GAS+'?action=claudebot_api&callback='+cb+'&token='+encodeURIComponent(TOKEN)+'&'+q;
+    s.onerror=function(){cleanup();rej(new Error('連線失敗'));};
+    document.body.appendChild(s);
+  });
+}
+
+var RESULT = {done:['完成','ok'], no_unread:['沒有未讀','ok'], partial:['部分完成，稍後補跑','warn'],
+              wait:['等你離開電腦','warn'], aborted:['中止','warn'], interrupted:['你回座，暫停','warn'],
+              blocked:['擋下（利衝名單讀不到）','warn'], dry_run:['演練','']};
+
+function renderToday(m){
+  var st = DATA.state;
+  if(!st || !st.rounds || !Object.keys(st.rounds).length){ m.appendChild(el('div','empty','今天還沒有跑過')); return; }
+  Object.keys(st.rounds).sort().forEach(function(k){
+    var r = st.rounds[k], card = el('div','msg');
+    var lab = RESULT[r.result] || [r.result,''];
+    card.appendChild(el('div','t', k+' 這一輪｜'+(r.at||'').slice(11,16)+' 執行'));
+    var head = el('div','row'); head.appendChild(el('span',null,'LINE 未讀 '+(r.dock_badge==null?'—':r.dock_badge)+'・綠點 '+(r.badges==null?'—':r.badges)+' 間'));
+    head.appendChild(el('span','tag '+lab[1],lab[0])); card.appendChild(head);
+    (r.opened||[]).forEach(function(o){
+      var row = el('div','row'); row.appendChild(el('span',null,'點開：'+o.name));
+      row.appendChild(el('span','tag', o.like_candidate ? '按讚候選・'+(o.like||'開關關閉') : '讀 '+o.lines+' 行'));
+      card.appendChild(row);
+    });
+    var sk = r.skipped_counts || {};
+    Object.keys(sk).forEach(function(why){
+      var row = el('div','row'); row.appendChild(el('span',null,'有綠點不點：'+why)); row.appendChild(el('span','tag',sk[why]+' 間')); card.appendChild(row);
+    });
+    m.appendChild(card);
+  });
+  m.appendChild(el('div','t','更新於 '+(st.pushedAt||'—')));
+}
+
+function sw(name, label, hint){
+  var s = DATA.settings||{}, box = el('div','set'), txt = el('div');
+  txt.appendChild(el('div',null,label)); txt.appendChild(el('small',null,hint)); box.appendChild(txt);
+  var b = el('button','sw'+(s[name]===true?' on':'')); b.setAttribute('aria-label',label);
+  b.onclick = function(){ save(name, s[name]===true ? 'false' : 'true'); };
+  box.appendChild(b); return box;
+}
+
+function renderTasks(m){
+  var s = DATA.settings||{}, card = el('div','msg');
+  card.appendChild(el('div','t','例行任務：每天依下列時段看 LINE 綠點'));
+  var box = el('div','set'), txt = el('div');
+  txt.appendChild(el('div',null,'執行時段')); txt.appendChild(el('small',null,'用逗號分隔，例：10:00,16:00,21:00')); box.appendChild(txt);
+  var wrap = el('div'); var inp = el('input'); inp.type='text'; inp.value=(s.slots||['10:00','16:00','21:00']).join(',');
+  var ok = el('button','btn','存'); ok.onclick=function(){ save('slots', inp.value); };
+  wrap.appendChild(inp); wrap.appendChild(ok); box.appendChild(wrap); card.appendChild(box);
+  card.appendChild(sw('auto_like','自動按讚','點開聊天室時，對生日、喜事、升任、得獎這類貼文當場按讚'));
+  card.appendChild(sw('drafts','擬回覆草稿','只產生草稿給你看，不會自動送出'));
+  m.appendChild(card);
+  m.appendChild(el('div','t','規則固定：案件群、利衝名單、家人、社群一律不點開。設定第 '+(s.rev||0)+' 版'+(s.updatedAt?'，'+s.updatedAt:'')));
+}
+
+function render(){
+  var m = document.getElementById('main'); m.textContent='';
+  document.getElementById('tab-today').className = TAB==='today'?'on':'';
+  document.getElementById('tab-tasks').className = TAB==='tasks'?'on':'';
+  if(TAB==='today') renderToday(m); else renderTasks(m);
+}
+
+async function save(name, value){
+  try{
+    var r = await api({op:'set', name:name, value:value});
+    if(!r.ok){ toast('沒存成：'+(r.msg==='bad setting'?'格式不對':r.msg)); return; }
+    DATA.settings = r.settings; render(); toast('已存，下一次巡查生效');
+  }catch(e){ toast('連線失敗，請再按一次'); }
+}
+
+async function load(){
+  var r = await api({op:'state'});
+  if(!r.ok){ document.getElementById('hd').textContent='⚠️ '+(r.msg==='forbidden'?'只有王律師本人可以看':r.msg||'讀取失敗'); return false; }
+  DATA = r; var st = r.state;
+  document.getElementById('hd').textContent = st && st.day ? st.day+'・今日巡查紀錄' : '尚無紀錄';
+  return true;
+}
+
+document.getElementById('tab-today').onclick=function(){TAB='today';render();};
+document.getElementById('tab-tasks').onclick=function(){TAB='tasks';render();};
+
+(async function(){
+  try{ await liff.init({liffId:LIFF_ID}); }
+  catch(e){ document.getElementById('hd').textContent='⚠️ LIFF 初始化失敗：'+(e.message||e); return; }
+  if(!liff.isLoggedIn()){ liff.login(); return; }
+  TOKEN = liff.getAccessToken();
+  if(location.hash==='#tasks') TAB='tasks';
+  try{ if(await load()) render(); }
+  catch(e){ document.getElementById('hd').textContent='⚠️ '+(e.message||e); }
+})();
+</script>
+</body>
+</html>
