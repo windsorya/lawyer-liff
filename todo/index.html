@@ -11,8 +11,9 @@
   try{
     var st = new URLSearchParams(location.search).get('liff.state') || '';
     if (st.indexOf('/claude-bot') === 0) {
-      var base = location.pathname.replace(/\/?$/, '/');
-      location.replace(base + 'claude-bot/' + (location.hash || ''));
+      // 目錄＝去掉檔名（明寫 index.html 也要對）；liff.state 自帶的 #分頁 要保留（Codex 審 ca2a6186）
+      var base = location.pathname.replace(/[^\/]*$/, '');
+      location.replace(base + st.replace(/^\//, ''));
     }
   }catch(e){}
 })();
@@ -207,7 +208,7 @@ function open(k){
         '<div class="empty">⚠️ '+esc(r.msg||'讀取失敗')+'</div>');return;}
       var ev=r.events||[];
       showPanel('<h2 style="font-size:16px">📅 一週庭期</h2>'+
-        '<div class="sub" style="margin-bottom:10px">X+' 起）週一至週五</div>'+
+        '<div class="sub" style="margin-bottom:10px">未來 7 天</div>'+
         (ev.length? ev.map(function(x){
           return '<div class="item"><h3>'+esc(x.title)+'</h3>'+
             '<div class="meta">'+esc(x.date)+(x.allDay?'（全日）':(x.time?' '+esc(x.time):''))+
