@@ -158,6 +158,46 @@ async def t_teach_record_flow():
     return ok, (starts, s1, s2, len(stops), s3, s4)
 
 
+async def t_teach_review_84b793d():
+    """Codex 審 84b793d 三項：①有待回答訊息（只抓 chat）時狀態列仍跟雲端走；②按開始前出發的舊 state 回應不得蓋掉新狀態；③停止失敗不得說已停止。"""
+    import datetime as dt
+    now = (dt.datetime.utcnow() + dt.timedelta(hours=8)).strftime("%Y-%m-%dT%H:%M:%S")
+    cur = {"t": None, "stop_ok": True}
+    gate = asyncio.Event(); gate.set()
+    async def h(q, log):
+        op = q.get("op")
+        if op == "teach":
+            if q.get("act") == "stop" and not cur["stop_ok"]:
+                return {"ok": False, "msg": "denied", "teach": cur["t"]}
+            cur["t"] = {"sid": "s000000000002", "state": "start" if q.get("act") == "start" else "stop", "at": now}
+            return {"ok": True, "teach": cur["t"]}
+        if op == "state":
+            snap = cur["t"]
+            await gate.wait()
+            return dict(STATE, chat=[{"id": "mpend0000001", "role": "me", "text": "等回答", "status": "pending", "at": now}] if cur.get("pend") else [], teach=snap)
+        if op == "chat":
+            return {"ok": True, "chat": [{"id": "mpend0000001", "role": "me", "text": "等回答", "status": "pending", "at": now}]}
+        return await base(q, log)
+    fast5 = "(function(){var st=window.setTimeout;window.setTimeout=function(f,d){if(d===5000)d=60;return st.call(window,f,d);};})();"
+    p, b, pg, log = await page_with(h, fast=True, init=fast5)
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(800)
+    # ② 舊 state 回應卡住（出發時 teach=None）→ 按開始 → 放行舊回應
+    gate.clear(); await pg.wait_for_timeout(200)
+    await pg.evaluate("openTeach(); 0;"); await pg.click("#teachGo"); await pg.wait_for_timeout(200)
+    gate.set(); await pg.wait_for_timeout(300)
+    r2 = await pg.get_attribute("#teachBar", "class")
+    # ① 有待回答訊息（poll 走 chat 分支）時，雲端進入 recording，狀態列要跟上
+    cur["pend"] = True; await pg.evaluate("DATA.chat = [{id:'mpend0000001',role:'me',text:'等回答',status:'pending',at:'" + now + "'}]; render(); 0;")
+    cur["t"] = dict(cur["t"], state="recording"); await pg.wait_for_timeout(600)
+    r1 = await pg.text_content("#teachTxt")
+    # ③ 停止失敗
+    cur["stop_ok"] = False
+    await pg.click("#teachStop"); await pg.wait_for_timeout(200)
+    r3 = await pg.text_content("#toast")
+    await b.close(); await p.stop()
+    return r2 == "on" and "錄製中" in (r1 or "") and "沒停成" in (r3 or ""), (r2, r1, r3)
+
+
 async def t_layout_class_survives_quote_cancel():
     p, b, pg, log = await page_with(base)
     await pg.goto("https://x.test/"); await pg.wait_for_timeout(800)
@@ -935,7 +975,7 @@ MATRIX = [t01, t02, t03, t04, t05, t06, t07, t08, t09, t10, t11, t12, t13, t14, 
           t21, t22, t23, t24, t25, t26, t27, t28, t29, t30, t31, t32, t33, t34, t35, t36, t37,
           t38, t39, t40, t41, t42, t43, t44, t45, t46, t47]
 EXISTING = [t_cid_reused_after_timeout, t_failure_keeps_new_draft_and_quote, t_stale_poll_does_not_drop_new_message,
-            t_teach_menu_keeps_draft, t_teach_record_flow, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
+            t_teach_menu_keeps_draft, t_teach_record_flow, t_teach_review_84b793d, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
             t_fail_after_typing_keeps_draft_and_unsent_full, t_fail_untouched_keeps_whole_message,
             t_type_then_clear_counts_as_touched, t_choices_show_despite_unsent, t_line_inapp_banner_390,
             t_draft_edit_store_intact, t_teach_during_pending_not_overwritten, t_line_banner_visible]

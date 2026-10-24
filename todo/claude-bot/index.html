@@ -645,6 +645,7 @@ function render(){
 }
 
 // 教它一項任務：開始／停止寫 GAS；Mac 每 20 秒讀一次才接手錄製，所以狀態列跟著雲端狀態走（不自己假設已在錄）
+var TEACH_EP = 0;   // 每按一次開始／停止 +1：出發早於這次操作的輪詢回應不得蓋掉本機剛拿到的錄製狀態
 var TEACH_TXT = { start:'準備錄製…Mac 接手後才開始錄（約 20 秒），看到「錄製中」再開始做',
   recording:'錄製中：請在 Mac 的 Chrome 上做一次，做完按停止', stop:'停止中…', learning:'正在學習你的步驟（幾分鐘），學好會貼在對話裡' };
 function teachLive(){
@@ -668,7 +669,9 @@ document.getElementById('teach').onclick = function(e){ if(e.target === this) th
 document.getElementById('teachGo').onclick = async function(){
   var b = this; b.disabled = true;
   try{
+    TEACH_EP++;
     var r = await api({op:'teach', act:'start', goal:document.getElementById('teachGoal').value.trim()});
+    TEACH_EP++;
     if(r.teach && DATA) DATA.teach = r.teach;
     if(!r.ok) toast(r.msg === 'recording' ? '已經有一場在錄製或學習中' : '沒開始成：' + r.msg);
     else { document.getElementById('teach').className = ''; document.getElementById('teachGoal').value = ''; toast('Mac 接手後會顯示「錄製中」'); }
@@ -678,9 +681,14 @@ document.getElementById('teachGo').onclick = async function(){
 };
 document.getElementById('teachStop').onclick = async function(){
   try{
+    TEACH_EP++;
     var r = await api({op:'teach', act:'stop'});
+    TEACH_EP++;
     if(r.teach && DATA) DATA.teach = r.teach;
-    paintTeach(); toast(r.teach && r.teach.state === 'cancel' ? '已取消' : '已停止，開始學習'); poll();
+    paintTeach();
+    if(!r.ok) toast('沒停成：' + (r.msg || '請再按一次'));   // Codex 審 84b793d P2：失敗不得說「已停止」
+    else toast(r.teach && r.teach.state === 'cancel' ? '已取消' : (r.teach && r.teach.state === 'stop' ? '已停止，開始學習' : '已經停了'));
+    poll();
   }catch(e){ toast('連不上：' + (e.message || e)); }
 };
 
@@ -985,14 +993,18 @@ function poll(){
   clearTimeout(POLL);
   POLL = setTimeout(async function(){
     if(document.hidden || !TOKEN || ACTIVE){ poll(); return; }
-    var pid = ++SYNC.nextPollId, ep = SYNC.epoch;
+    var pid = ++SYNC.nextPollId, ep = SYNC.epoch, tep = TEACH_EP;
     function fresh(){ return pid > SYNC.lastApplied && ep === SYNC.epoch && !ACTIVE; }
     try{
       var near = document.body.scrollHeight - (window.scrollY + window.innerHeight) < 200;
       if(waiting() || hasUnknown()){ var r = await api({op:'chat'}); if(r.ok && fresh()){ SYNC.lastApplied = pid; var was = JSON.stringify(chat()) + pendSig();
         applyCloudChat(r.chat, true);
-        if(JSON.stringify(chat()) + pendSig() !== was && !editing()){ render(); if(near) bottom(); } paintNote(); } }
-      else if(!editing()){ var st = await api({op:'state'}); if(st.ok && fresh()){ SYNC.lastApplied = pid; var ch = st.chat; DATA = st; applyCloudChat(ch, true); render(); } }
+        if(JSON.stringify(chat()) + pendSig() !== was && !editing()){ render(); if(near) bottom(); } paintNote(); }
+        // 有待回答的訊息時只抓對話；錄製／學習中另讀一次狀態，狀態列才不會卡在「準備錄製」（Codex 審 84b793d P2）
+        if(teachLive()){ var ts = await api({op:'state'}); if(ts.ok && DATA && tep === TEACH_EP){ DATA.teach = ts.teach; paintTeach(); } } }
+      else if(!editing()){ var st = await api({op:'state'}); if(st.ok && fresh()){ SYNC.lastApplied = pid; var ch = st.chat, keep = DATA && DATA.teach;
+        DATA = st; if(tep !== TEACH_EP) DATA.teach = keep;   // 出發後按過開始／停止：舊快照不得蓋掉新的錄製狀態（Codex 審 84b793d P2）
+        applyCloudChat(ch, true); render(); } }
     }catch(e){}
     poll();
   }, (waiting() || hasUnknown()) ? 4000 : (teachLive() ? 5000 : 30000));   // 錄製／學習中 5 秒一次，狀態列才跟得上
