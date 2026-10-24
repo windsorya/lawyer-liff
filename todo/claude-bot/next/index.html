@@ -575,11 +575,13 @@ async function load(){
 
 // 底部輸入框：送出＝存到 GAS（pending），Mac 上的 Claude 讀到後回答；等回覆時每 4 秒看一次
 var Q = document.getElementById('q'), SEND = document.getElementById('send'), SENDING = false;
+var SEQ = 0, LASTFAIL = null;   // SEQ：本機對話每變一次就 +1，晚到的輪詢結果不得蓋掉（Codex 審 12d3f62）
 function fitQ(){ Q.style.height='auto'; Q.style.height=Math.min(Q.scrollHeight,160)+'px'; SEND.disabled = SENDING || (!Q.value.trim() && !ATT) || !TOKEN; }
 // 附加圖片（Grok Bot 的 ＋→附加檔案）：先壓成長邊 1600px JPEG，送出時 POST 到 GAS（快取 6 小時），Mac 取走後給工作階段看
 var ATT = null, LOCALIMG = {}, FILE = document.getElementById('file');
+function barClass(){ document.getElementById('barbox').className = 'bar' + (REPLY ? ' quoting' : '') + (ATT ? ' att' : ''); }
 function setAtt(a){ ATT = a; document.getElementById('ap').className = a ? 'on' : ''; if(a) document.getElementById('api').src = a.url;
-  document.getElementById('barbox').className = 'bar' + (REPLY ? ' quoting' : '') + (a ? ' att' : ''); fitQ(); }
+  barClass(); fitQ(); }
 var ICON_IMG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/></svg>';
 var ICON_TEACH = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="#dc2626" stroke-width="2"/><circle cx="12" cy="12" r="4" fill="#dc2626"/></svg>';
 // ＋ 選單（Grok Bot 實機：附加檔案／教它一項任務）
@@ -589,7 +591,8 @@ document.getElementById('plus').onclick = function(){
   var a = el('button','it'); a.innerHTML = ICON_IMG; a.appendChild(el('span',null,'附加圖片'));
   a.onclick = function(){ MENU.className=''; FILE.value=''; FILE.click(); };
   var t = el('button','it'); t.innerHTML = ICON_TEACH; t.appendChild(el('span',null,'教它一項任務'));
-  t.onclick = function(){ MENU.className=''; Q.value = '教你一項任務：每天 '; fitQ(); Q.focus(); Q.setSelectionRange(Q.value.length, Q.value.length);
+  t.onclick = function(){ MENU.className=''; var pre = '教你一項任務：每天 ';
+    if(Q.value.indexOf(pre) !== 0) Q.value = pre + Q.value.replace(/^\s+/, ''); fitQ(); Q.focus(); Q.setSelectionRange(Q.value.length, Q.value.length);
     toast('寫下幾點做、做什麼、整理成什麼樣子'); };
   MCARD.appendChild(a); MCARD.appendChild(t); MENU.className = 'on';
   MCARD.style.left = Math.max(12, r.left) + 'px'; MCARD.style.top = Math.max(12, r.top - MCARD.offsetHeight - 10) + 'px';
@@ -622,28 +625,40 @@ SEND.onclick = async function(){
   var text = Q.value.trim(); if((!text && !ATT) || SENDING || !DATA) return;
   if(!text) text = '（看這張圖）';
   if(text.length > 2000){ toast('太長了（最多 2000 字）'); return; }
-  SENDING = true; fitQ();
-  var cid = (Date.now().toString(36) + Math.random().toString(36).slice(2)).replace(/[^a-z0-9]/g,'').slice(0,20);
+  SENDING = true; SEQ++; fitQ();
+  var quote = REPLY || '', att = ATT;
+  // 同一則（文字、引用、附圖都一樣）上次沒確認送成 ⇒ 沿用同一個 cid：GAS 依 cid 只收第一次，逾時重按不會變兩題（Codex 審 12d3f62 P1）
+  var same = LASTFAIL && LASTFAIL.text === text && LASTFAIL.quote === quote && LASTFAIL.att === att;
+  var cid = same ? LASTFAIL.cid : (Date.now().toString(36) + Math.random().toString(36).slice(2)).replace(/[^a-z0-9]/g,'').slice(0,20);
   var refs = {}; Object.keys(NUM).forEach(function(c){ refs[NUM[c]] = c; });
-  var att = ATT; if(att) LOCALIMG['m'+cid] = att.url;
-  var mine = {id:'m'+cid, role:'me', text:text, quote:REPLY||'', att: att ? 'pending' : '', at:new Date(Date.now()+8*3600e3).toISOString().slice(0,19), status:'pending'};
-  DATA.chat = chat().concat([mine]); Q.value=''; fitQ(); render(); bottom();
+  if(att) LOCALIMG['m'+cid] = att.url;
+  var mine = {id:'m'+cid, role:'me', text:text, quote:quote, att: att ? 'pending' : '', at:new Date(Date.now()+8*3600e3).toISOString().slice(0,19), status:'pending'};
+  DATA.chat = chat().filter(function(x){ return x.id !== mine.id; }).concat([mine]); Q.value=''; setAtt(null); fitQ(); render(); bottom();
   try{
-    var attId = '';
-    if(att){ attId = await upload(cid, att); setAtt(null); }
-    var r = await api({op:'ask', text:text, cid:cid, refs:JSON.stringify(refs), quote:REPLY||'', att:attId});
-    setReply(null);
-    if(!r.ok) throw new Error(r.msg==='too long'?'太長了':r.msg==='full'?'還有太多題沒回完，等 Claude Bot 回完再傳':r.msg||'沒送成');
+    var attId = att ? await upload(cid, att) : '';
+    var r = await api({op:'ask', text:text, cid:cid, refs:JSON.stringify(refs), quote:quote, att:attId});
+    if(!r.ok){ var hard = r.msg === 'too long' || r.msg === 'full'; throw Object.assign(new Error(r.msg==='too long'?'太長了':r.msg==='full'?'還有太多題沒回完，等 Claude Bot 回完再傳':r.msg||'沒送成'), {hard:hard}); }
+    LASTFAIL = null; SEQ++;
+    if(REPLY === (quote || null)) setReply(null);   // 送出期間他改選了別的引用就留著
     DATA.chat = r.chat; render(); bottom(); poll();
   }catch(e){
-    DATA.chat = chat().filter(function(x){ return x !== mine; }); Q.value = text === '（看這張圖）' ? '' : text; if(att && !ATT) setAtt(att); render(); toast('沒送成：'+(e.message||e)+'，再按一次');
+    // 雲端明確拒收（太長／滿了）＝確定沒收，下次換新 cid；逾時／連線失敗＝可能已收，下次同一則沿用 cid
+    LASTFAIL = e.hard ? null : {cid:cid, text:text, quote:quote, att:att};
+    SEQ++;
+    DATA.chat = chat().filter(function(x){ return x !== mine; });
+    var kept = Q.value.trim() !== '';   // 送出後他已經打了新的字 ⇒ 不蓋掉（Codex 審 12d3f62 P1）
+    if(!kept) Q.value = text === '（看這張圖）' ? '' : text;
+    if(att && !ATT) setAtt(att);
+    if(quote && !REPLY) setReply(quote);
+    render(); fitQ();
+    toast('沒送成：'+(e.message||e)+(kept ? '（你剛打的新內容保留著；沒送成的那則是「'+text.slice(0,20)+(text.length>20?'…':'')+'」）' : '，再按一次'));
   }finally{ SENDING = false; fitQ(); }
 };
 // 兩指點擊（電腦＝右鍵 contextmenu）／長按 0.5 秒（手機）→ 選單
 var REPLY = null, MENU = document.getElementById('menu'), MCARD = document.getElementById('mcard');
 function setReply(t){ REPLY = t ? t.replace(/\s+/g,' ').trim().slice(0,200) : null;
   document.getElementById('rqt').textContent = REPLY || ''; document.getElementById('rq').className = REPLY ? 'on' : '';
-  document.getElementById('barbox').className = 'bar' + (REPLY ? ' quoting' : ''); Q.placeholder = REPLY ? '回覆…' : '傳訊息給 Claude Bot'; if(REPLY) Q.focus(); }
+  barClass(); Q.placeholder = REPLY ? '回覆…' : '傳訊息給 Claude Bot'; if(REPLY) Q.focus(); }
 document.getElementById('rqx').onclick = function(){ setReply(null); };
 MENU.addEventListener('click', function(e){ if(e.target === MENU) MENU.className=''; });
 MENU.addEventListener('contextmenu', function(e){ e.preventDefault(); MENU.className=''; });
@@ -712,12 +727,12 @@ function editing(){ var a = document.activeElement; return a && a.tagName==='TEX
 function poll(){
   clearTimeout(POLL);
   POLL = setTimeout(async function(){
-    if(document.hidden || !TOKEN){ poll(); return; }
+    if(document.hidden || !TOKEN || SENDING){ poll(); return; }
     try{
-      var near = document.body.scrollHeight - (window.scrollY + window.innerHeight) < 200;
-      if(waiting()){ var r = await api({op:'chat'}); if(r.ok){ var was = JSON.stringify(chat()); DATA.chat = r.chat;
+      var near = document.body.scrollHeight - (window.scrollY + window.innerHeight) < 200, s0 = SEQ;
+      if(waiting()){ var r = await api({op:'chat'}); if(r.ok && s0 === SEQ && !SENDING){ var was = JSON.stringify(chat()); DATA.chat = r.chat;
         if(JSON.stringify(r.chat) !== was && !editing()){ render(); if(near) bottom(); } } }
-      else if(!editing() && await load()){ render(); }
+      else if(!editing()){ var st = await api({op:'state'}); if(st.ok && s0 === SEQ && !SENDING){ DATA = st; render(); } }
     }catch(e){}
     poll();
   }, waiting() ? 4000 : 30000);
