@@ -652,6 +652,12 @@ var TEACH_RANK = {start:0, recording:1, stop:2, learning:3, done:4, failed:4, ca
  *  learning 先到、晚到的 recording 讓狀態倒退）；雲端不會讓已存在的紀錄消失，回 null＝舊快照不收。與雲端轉移表同一套排序。 */
 function takeTeach(nt, tep){
   if(!DATA || tep !== TEACH_EP) return;
+  acceptTeach(nt);
+}
+/** 同一場只准往後走（輪詢與按鈕回應共用：Codex 審 b437241 P2——停止鈕的回應原本直接寫 DATA.teach，
+ *  按停止後出發的輪詢先拿到 learning、晚到的停止回應 stop 又把它蓋回「停止中」）。 */
+function acceptTeach(nt){
+  if(!DATA) return;
   var c = DATA.teach;
   if(c && !nt) return;
   if(c && nt && c.sid === nt.sid && (TEACH_RANK[nt.state] || 0) < (TEACH_RANK[c.state] || 0)) return;
@@ -683,7 +689,7 @@ document.getElementById('teachGo').onclick = async function(){
     TEACH_EP++;
     var r = await api({op:'teach', act:'start', goal:document.getElementById('teachGoal').value.trim()});
     TEACH_EP++;
-    if(r.teach && DATA) DATA.teach = r.teach;
+    if(r.teach) acceptTeach(r.teach);   // 按鈕回應也走同一套「只准往後走」
     if(!r.ok) toast(r.msg === 'recording' ? '已經有一場在錄製或學習中' : '沒開始成：' + r.msg);
     else { document.getElementById('teach').className = ''; document.getElementById('teachGoal').value = ''; toast('Mac 接手後會顯示「錄製中」'); }
     paintTeach(); poll();
@@ -695,7 +701,7 @@ document.getElementById('teachStop').onclick = async function(){
     TEACH_EP++;
     var r = await api({op:'teach', act:'stop'});
     TEACH_EP++;
-    if(r.teach && DATA) DATA.teach = r.teach;
+    if(r.teach) acceptTeach(r.teach);   // 按鈕回應也走同一套「只准往後走」
     paintTeach();
     if(!r.ok) toast('沒停成：' + (r.msg || '請再按一次'));   // Codex 審 84b793d P2：失敗不得說「已停止」
     else toast(r.teach && r.teach.state === 'cancel' ? '已取消' : (r.teach && r.teach.state === 'stop' ? '已停止，開始學習' : '已經停了'));

@@ -219,6 +219,38 @@ async def t_teach_out_of_order():
     return r == ["learning", "learning", "learning", "s000000000004"], r
 
 
+async def t_teach_stop_response_late():
+    """Codex 審 b437241 P2：按停止、停止回應延遲；按下後出發的輪詢先拿到 learning；晚到的停止回應（stop）不得把狀態列蓋回「停止中」。
+    走真的按鈕與輪詢（不是直接呼叫 takeTeach），舊頁面（按鈕回應直接寫 DATA.teach）跑會紅。"""
+    import datetime as dt
+    now = (dt.datetime.utcnow() + dt.timedelta(hours=8)).strftime("%Y-%m-%dT%H:%M:%S")
+    sid = "s000000000005"
+    cur = {"t": {"sid": sid, "state": "recording", "at": now}, "hold": False}
+    gate, hold = asyncio.Event(), asyncio.Event()
+    async def h(q, log):
+        op = q.get("op")
+        if op == "teach" and q.get("act") == "stop":
+            stop_t = dict(cur["t"], state="stop"); cur["t"] = dict(stop_t, state="learning")   # 雲端很快被 Mac 推到 learning
+            await gate.wait()
+            return {"ok": True, "teach": stop_t}
+        if op == "state":
+            if cur["hold"]:
+                await hold.wait()   # 放行停止回應之後不再有輪詢來「修正」：看得到停止回應本身有沒有讓狀態倒退
+            return dict(STATE, chat=[], teach=cur["t"])
+        return await base(q, log)
+    fast5 = "(function(){var st=window.setTimeout;window.setTimeout=function(f,d){if(d===5000)d=60;return st.call(window,f,d);};})();"
+    p, b, pg, log = await page_with(h, fast=True, init=fast5)
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(800)
+    a = await pg.text_content("#teachTxt")
+    await pg.click("#teachStop"); await pg.wait_for_timeout(500)     # 停止回應卡住；這段期間的輪詢拿到 learning
+    m = await pg.text_content("#teachTxt")
+    cur["hold"] = True; await pg.wait_for_timeout(200)
+    gate.set(); await pg.wait_for_timeout(400)                       # 放行晚到的停止回應
+    z = await pg.text_content("#teachTxt"); st = await pg.evaluate("DATA.teach && DATA.teach.state")
+    hold.set(); await b.close(); await p.stop()
+    return "錄製中" in (a or "") and "學習" in (m or "") and "學習" in (z or "") and st == "learning", (a, m, z, st)
+
+
 async def t_layout_class_survives_quote_cancel():
     p, b, pg, log = await page_with(base)
     await pg.goto("https://x.test/"); await pg.wait_for_timeout(800)
@@ -1012,7 +1044,7 @@ MATRIX = [t01, t02, t03, t04, t05, t06, t07, t08, t09, t10, t11, t12, t13, t14, 
           t21, t22, t23, t24, t25, t26, t27, t28, t29, t30, t31, t32, t33, t34, t35, t36, t37,
           t38, t39, t40, t41, t42, t43, t44, t45, t46, t47, t48]
 EXISTING = [t_cid_reused_after_timeout, t_failure_keeps_new_draft_and_quote, t_stale_poll_does_not_drop_new_message,
-            t_teach_menu_keeps_draft, t_teach_record_flow, t_teach_review_84b793d, t_teach_out_of_order, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
+            t_teach_menu_keeps_draft, t_teach_record_flow, t_teach_review_84b793d, t_teach_out_of_order, t_teach_stop_response_late, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
             t_fail_after_typing_keeps_draft_and_unsent_full, t_fail_untouched_keeps_whole_message,
             t_type_then_clear_counts_as_touched, t_choices_show_despite_unsent, t_line_inapp_banner_390,
             t_draft_edit_store_intact, t_teach_during_pending_not_overwritten, t_line_banner_visible]
