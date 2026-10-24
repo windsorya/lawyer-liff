@@ -164,6 +164,16 @@
        border-radius:29px;background:var(--fab);box-shadow:var(--shadow)}
   .bar textarea{flex:1;min-height:44px;max-height:160px;background:none;border:0;border-radius:0;padding:10px 0;font-size:17px;line-height:1.45}
   .bar textarea::placeholder{color:var(--faint)}
+  .plus{width:44px;height:44px;border-radius:50%;border:0;background:var(--panel);color:var(--sub);display:grid;place-items:center;flex:none;margin-left:-13px;touch-action:manipulation}
+  .plus svg{width:22px;height:22px}
+  #ap{display:none;position:relative;width:100%}
+  #ap.on{display:flex;align-items:flex-start}
+  #ap img{height:72px;border-radius:12px;border:1px solid var(--line)}
+  #ap .x{margin:-8px 0 0 -14px;box-shadow:var(--shadow);background:var(--fab)}
+  .bar.quoting,.bar.att{flex-wrap:wrap;border-radius:24px;padding-top:10px}
+  .meimg{display:flex;justify-content:flex-end;margin:0 0 6px}
+  .meimg img{max-width:60%;max-height:220px;border-radius:18px}
+  .meimg span{background:var(--panel);border-radius:14px;padding:6px 12px;font-size:14px;color:var(--sub)}
   .go{width:44px;height:44px;border-radius:50%;border:0;background:var(--solid);color:var(--on-solid);display:grid;place-items:center;flex:none;touch-action:manipulation}
   .go:disabled{opacity:.25}
   .go svg{width:20px;height:20px}
@@ -192,7 +202,7 @@
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
 <div id="menu"><div class="card" id="mcard"></div></div>
 <div class="dock" id="dock"><div id="hd">讀取中…</div>
-  <div class="bar" id="barbox"><div id="rq"><span id="rqt"></span><button class="x" id="rqx" aria-label="取消回覆">×</button></div><textarea id="q" rows="1" placeholder="傳訊息給 Claude Bot" aria-label="傳訊息給 Claude Bot"></textarea>
+  <div class="bar" id="barbox"><div id="rq"><span id="rqt"></span><button class="x" id="rqx" aria-label="取消回覆">×</button></div><div id="ap"><img id="api" alt="要附的圖"><button class="x" id="apx" aria-label="取消附圖">×</button></div><button class="plus" id="plus" aria-label="附加圖片"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button><input type="file" id="file" accept="image/*" hidden><textarea id="q" rows="1" placeholder="傳訊息給 Claude Bot" aria-label="傳訊息給 Claude Bot"></textarea>
   <button class="go" id="send" aria-label="送出" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button></div></div>
 <div id="toast"></div>
 
@@ -306,8 +316,9 @@ function draftCard(d){
 }
 
 function renderChat(m){
-  var st = DATA.state;
-  if(!st || !st.rounds || !Object.keys(st.rounds).length){ m.appendChild(el('div','empty','今天還沒有跑過')); return; }
+  // 還沒有巡查輪次時照樣顯示對話（舊版在這裡直接 return，早上 10 點前整串對話都看不到）
+  var st = DATA.state && DATA.state.rounds ? DATA.state : {rounds:{}};
+  if(!Object.keys(st.rounds).length && !chat().length){ m.appendChild(el('div','empty','今天還沒有跑過')); return; }
   // 主角是要回的草稿：沒有草稿的輪次併成一行（可展開），有草稿的輪次照時間排在下面
   var keys = Object.keys(st.rounds).sort(function(x,y){ var a=(st.rounds[x].at||'')+x, b=(st.rounds[y].at||'')+y; return a<b?-1:a>b?1:0; })   /* 照執行時間排，過午夜的輪次排在後面 */;
   function done(k){ var x = st.rounds[k].result; return !x || x === 'done' || x === 'no_unread'; }
@@ -364,6 +375,10 @@ var ASK_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strok
 function renderMsg(m, x){
   if(x.role === 'me'){
     if(x.quote) m.appendChild(el('div','meq','↩ '+x.quote));
+    if(x.att){ var mi = el('div','meimg');
+      if(LOCALIMG[x.id]){ var im = el('img'); im.src = LOCALIMG[x.id]; im.alt = '你附的圖'; mi.appendChild(im); }
+      else mi.appendChild(el('span',null,'🖼 附了一張圖'));
+      m.appendChild(mi); }
     var w = el('div','me'), b = el('div'); b.textContent = x.text;
     if(x.reaction) b.appendChild(el('span','rx',x.reaction));
     bindMenu(b, {id:x.id, text:x.text, reaction:x.reaction});
@@ -530,23 +545,55 @@ async function load(){
 
 // 底部輸入框：送出＝存到 GAS（pending），Mac 上的 Claude 讀到後回答；等回覆時每 4 秒看一次
 var Q = document.getElementById('q'), SEND = document.getElementById('send'), SENDING = false;
-function fitQ(){ Q.style.height='auto'; Q.style.height=Math.min(Q.scrollHeight,160)+'px'; SEND.disabled = SENDING || !Q.value.trim() || !TOKEN; }
+function fitQ(){ Q.style.height='auto'; Q.style.height=Math.min(Q.scrollHeight,160)+'px'; SEND.disabled = SENDING || (!Q.value.trim() && !ATT) || !TOKEN; }
+// 附加圖片（Grok Bot 的 ＋→附加檔案）：先壓成長邊 1600px JPEG，送出時 POST 到 GAS（快取 6 小時），Mac 取走後給工作階段看
+var ATT = null, LOCALIMG = {}, FILE = document.getElementById('file');
+function setAtt(a){ ATT = a; document.getElementById('ap').className = a ? 'on' : ''; if(a) document.getElementById('api').src = a.url;
+  document.getElementById('barbox').className = 'bar' + (REPLY ? ' quoting' : '') + (a ? ' att' : ''); fitQ(); }
+document.getElementById('plus').onclick = function(){ FILE.value = ''; FILE.click(); };
+document.getElementById('apx').onclick = function(){ setAtt(null); };
+FILE.onchange = function(){
+  var f = FILE.files && FILE.files[0]; if(!f) return;
+  var img = new Image(), u = URL.createObjectURL(f);
+  img.onload = function(){
+    var k = Math.min(1, 1600 / Math.max(img.width, img.height)), c = document.createElement('canvas');
+    c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    var url = c.toDataURL('image/jpeg', 0.8), b64 = url.split(',')[1];
+    if(b64.length > 700000){ url = c.toDataURL('image/jpeg', 0.6); b64 = url.split(',')[1]; }
+    if(b64.length > 700000){ toast('圖太大，請截小一點再傳'); return; }
+    setAtt({url:url, b64:b64, mime:'image/jpeg'}); URL.revokeObjectURL(u); Q.focus();
+  };
+  img.onerror = function(){ toast('這個檔案讀不了，請選圖片'); };
+  img.src = u;
+};
+async function upload(cid, a){
+  var res = await fetch(GAS, {method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body: JSON.stringify({action:'claudeBotPush', token:TOKEN, upload:{cid:cid, mime:a.mime, b64:a.b64}})});
+  var r = await res.json();
+  if(!r.ok) throw new Error(r.msg === 'forbidden' ? '身分驗證失敗' : '圖沒傳成');
+  return r.att;
+}
 Q.oninput = fitQ;
 SEND.onclick = async function(){
-  var text = Q.value.trim(); if(!text || SENDING || !DATA) return;
+  var text = Q.value.trim(); if((!text && !ATT) || SENDING || !DATA) return;
+  if(!text) text = '（看這張圖）';
   if(text.length > 2000){ toast('太長了（最多 2000 字）'); return; }
   SENDING = true; fitQ();
   var cid = (Date.now().toString(36) + Math.random().toString(36).slice(2)).replace(/[^a-z0-9]/g,'').slice(0,20);
   var refs = {}; Object.keys(NUM).forEach(function(c){ refs[NUM[c]] = c; });
-  var mine = {id:'m'+cid, role:'me', text:text, quote:REPLY||'', at:new Date(Date.now()+8*3600e3).toISOString().slice(0,19), status:'pending'};
+  var att = ATT; if(att) LOCALIMG['m'+cid] = att.url;
+  var mine = {id:'m'+cid, role:'me', text:text, quote:REPLY||'', att: att ? 'pending' : '', at:new Date(Date.now()+8*3600e3).toISOString().slice(0,19), status:'pending'};
   DATA.chat = chat().concat([mine]); Q.value=''; fitQ(); render(); bottom();
   try{
-    var r = await api({op:'ask', text:text, cid:cid, refs:JSON.stringify(refs), quote:REPLY||''});
+    var attId = '';
+    if(att){ attId = await upload(cid, att); setAtt(null); }
+    var r = await api({op:'ask', text:text, cid:cid, refs:JSON.stringify(refs), quote:REPLY||'', att:attId});
     setReply(null);
     if(!r.ok) throw new Error(r.msg==='too long'?'太長了':r.msg||'沒送成');
     DATA.chat = r.chat; render(); bottom(); poll();
   }catch(e){
-    DATA.chat = chat().filter(function(x){ return x !== mine; }); Q.value = text; render(); toast('沒送成：'+(e.message||e)+'，再按一次');
+    DATA.chat = chat().filter(function(x){ return x !== mine; }); Q.value = text === '（看這張圖）' ? '' : text; if(att && !ATT) setAtt(att); render(); toast('沒送成：'+(e.message||e)+'，再按一次');
   }finally{ SENDING = false; fitQ(); }
 };
 // 兩指點擊（電腦＝右鍵 contextmenu）／長按 0.5 秒（手機）→ 選單
