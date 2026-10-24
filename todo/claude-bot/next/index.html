@@ -132,15 +132,27 @@
   #menu{position:fixed;inset:0;z-index:9;display:none}
   #menu.on{display:block}
   #menu .card{position:absolute;width:250px;background:var(--fab);box-shadow:0 8px 32px rgba(0,0,0,.18),0 0 0 1px rgba(0,0,0,.05);border-radius:20px;padding:10px 8px 6px;margin:0}
+  #menu .card.pill{width:auto;border-radius:99px;padding:6px 10px}
+  #menu .card.pill .emo{border:0;margin:0;padding:0;gap:4px}
   #menu .emo{display:flex;justify-content:space-around;padding:2px 4px 8px;border-bottom:1px solid var(--line);margin-bottom:4px}
   #menu .emo button{border:0;background:none;font-size:26px;width:40px;height:40px;border-radius:50%}
   #menu .emo button.sel{background:var(--panel)}
   #menu .it{display:flex;align-items:center;gap:12px;width:100%;border:0;background:none;font-size:17px;padding:10px 12px;border-radius:12px;text-align:left}
   #menu .it:active{background:var(--panel)}
   #menu .it svg{width:20px;height:20px}
+  /* 電腦上滑過泡泡：旁邊浮出 表情／回覆／更多（Grok Bot 實機）；手機沒有滑過，用長按 */
+  .hov{display:none;position:absolute;top:50%;transform:translateY(-50%);gap:2px;padding:0 6px}
+  .hov button{width:34px;height:34px;border:0;border-radius:10px;background:none;color:var(--sub);display:grid;place-items:center}
+  .hov button:hover{background:var(--panel)}
+  .hov svg{width:20px;height:20px}
+  @media (hover:hover){ .msg:hover > .hov, .me div:hover > .hov{display:flex} }
+  .msg > .hov{left:100%}
+  .me div > .hov{right:100%}
   .rx{position:absolute;right:-6px;bottom:-12px;background:var(--fab);box-shadow:var(--shadow);border-radius:99px;padding:1px 7px;font-size:15px}
   .meq{text-align:right;font-size:13px;color:var(--sub);margin:0 8px 4px}
-  #rq{display:none;align-items:center;gap:8px;max-width:648px;margin:0 auto 8px;background:var(--panel);border-radius:14px;padding:8px 8px 8px 14px;font-size:14px;color:var(--sub)}
+  #rq{display:none;align-items:center;gap:8px;width:100%;background:var(--fab);border:1px solid var(--line);border-radius:14px;padding:6px 6px 6px 12px;font-size:14px;color:var(--sub)}
+  .bar.quoting{flex-wrap:wrap;border-radius:24px;padding-top:10px}
+  .bar.quoting #rq{margin-right:-1px}
   #rq.on{display:flex}
   #rq span{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .num{display:inline-grid;place-items:center;min-width:24px;height:24px;border-radius:12px;background:var(--solid);color:var(--on-solid);font-size:13px;font-weight:600;margin-right:8px;padding:0 6px}
@@ -180,8 +192,7 @@
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
 <div id="menu"><div class="card" id="mcard"></div></div>
 <div class="dock" id="dock"><div id="hd">讀取中…</div>
-  <div id="rq"><span id="rqt"></span><button class="x" id="rqx" aria-label="取消回覆">×</button></div>
-  <div class="bar"><textarea id="q" rows="1" placeholder="傳訊息給 Claude Bot" aria-label="傳訊息給 Claude Bot"></textarea>
+  <div class="bar" id="barbox"><div id="rq"><span id="rqt"></span><button class="x" id="rqx" aria-label="取消回覆">×</button></div><textarea id="q" rows="1" placeholder="傳訊息給 Claude Bot" aria-label="傳訊息給 Claude Bot"></textarea>
   <button class="go" id="send" aria-label="送出" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button></div></div>
 <div id="toast"></div>
 
@@ -541,16 +552,18 @@ SEND.onclick = async function(){
 // 兩指點擊（電腦＝右鍵 contextmenu）／長按 0.5 秒（手機）→ 選單
 var REPLY = null, MENU = document.getElementById('menu'), MCARD = document.getElementById('mcard');
 function setReply(t){ REPLY = t ? t.replace(/\s+/g,' ').trim().slice(0,200) : null;
-  document.getElementById('rqt').textContent = REPLY ? '回覆：'+REPLY : ''; document.getElementById('rq').className = REPLY ? 'on' : ''; if(REPLY) Q.focus(); }
+  document.getElementById('rqt').textContent = REPLY || ''; document.getElementById('rq').className = REPLY ? 'on' : '';
+  document.getElementById('barbox').className = 'bar' + (REPLY ? ' quoting' : ''); Q.placeholder = REPLY ? '回覆…' : '傳訊息給 Claude Bot'; if(REPLY) Q.focus(); }
 document.getElementById('rqx').onclick = function(){ setReply(null); };
 MENU.addEventListener('click', function(e){ if(e.target === MENU) MENU.className=''; });
 MENU.addEventListener('contextmenu', function(e){ e.preventDefault(); MENU.className=''; });
 var ICON_REPLY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-2"/></svg>';
 var ICON_COPY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></svg>';
-function openMenu(info, x, y){
+function openMenu(info, x, y, mode){
+  mode = mode || 'all';
   var text = info.text != null ? info.text : (info.box ? info.box.innerText : '');
-  MCARD.textContent = '';
-  if(info.id){
+  MCARD.textContent = ''; MCARD.className = 'card' + (mode==='emoji' ? ' pill' : '');
+  if(info.id && mode !== 'more'){
     var row = el('div','emo');
     ['👍','👎','❤️','😂','🎉'].forEach(function(e){
       var b = el('button', info.reaction===e ? 'sel' : null, e); b.setAttribute('aria-label','表情 '+e);
@@ -561,15 +574,29 @@ function openMenu(info, x, y){
   }
   var r = el('button','it'); r.innerHTML = ICON_REPLY; r.appendChild(el('span',null,'回覆'));
   r.onclick = function(){ MENU.className=''; setReply(text); };
+  if(mode === 'emoji'){ r = null; }
   var c = el('button','it'); c.innerHTML = ICON_COPY; c.appendChild(el('span',null,'複製'));
   c.onclick = function(){ MENU.className=''; copyText(text, function(ok){ toast(ok ? '已複製' : '複製失敗，請再試一次'); }); };
-  MCARD.appendChild(r); MCARD.appendChild(c);
+  if(mode === 'all') MCARD.appendChild(r);
+  if(mode !== 'emoji') MCARD.appendChild(c);
   MENU.className = 'on';
-  var w = 250, h = MCARD.offsetHeight, vw = window.innerWidth, vh = window.innerHeight;
+  var w = MCARD.offsetWidth || 250, h = MCARD.offsetHeight, vw = window.innerWidth, vh = window.innerHeight;
   MCARD.style.left = Math.max(12, Math.min(x - w/2, vw - w - 12)) + 'px';
   MCARD.style.top = Math.max(12, Math.min(y + 12, vh - h - 12)) + 'px';
 }
+var ICON_SMILE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><path d="M9 9.5h.01M15 9.5h.01"/></svg>';
+var ICON_MORE = '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>';
+function hoverBar(node, info){
+  var h = el('div','hov');
+  function btn(icon, label, fn){ var b = el('button'); b.innerHTML = icon; b.setAttribute('aria-label', label);
+    b.onclick = function(e){ e.stopPropagation(); var r = b.getBoundingClientRect(); fn(r.left + r.width/2, r.bottom); }; h.appendChild(b); }
+  if(info.id) btn(ICON_SMILE, '表情', function(x,y){ openMenu(info, x, y, 'emoji'); });
+  btn(ICON_REPLY, '回覆', function(){ setReply(info.text != null ? info.text : (info.box ? info.box.innerText : '')); });
+  btn(ICON_MORE, '更多', function(x,y){ openMenu(info, x, y, 'more'); });
+  node.appendChild(h);
+}
 function bindMenu(node, info){
+  hoverBar(node, info);
   node.addEventListener('contextmenu', function(e){ e.preventDefault(); openMenu(info, e.clientX, e.clientY); });
   var t = null, sx = 0, sy = 0;
   node.addEventListener('touchstart', function(e){
