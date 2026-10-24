@@ -127,6 +127,22 @@
   .rule{display:flex;align-items:center;gap:12px;padding:12px 16px;border-top:1px solid var(--line);font-size:16px}
   .rule:first-child{border-top:0}
   .rule span{flex:1}
+  /* 兩指點擊（右鍵）／長按泡泡的選單：Grok Bot 實機＝一排表情＋回覆＋複製 */
+  .msg,.me div{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;position:relative}
+  #menu{position:fixed;inset:0;z-index:9;display:none}
+  #menu.on{display:block}
+  #menu .card{position:absolute;width:250px;background:var(--fab);box-shadow:0 8px 32px rgba(0,0,0,.18),0 0 0 1px rgba(0,0,0,.05);border-radius:20px;padding:10px 8px 6px;margin:0}
+  #menu .emo{display:flex;justify-content:space-around;padding:2px 4px 8px;border-bottom:1px solid var(--line);margin-bottom:4px}
+  #menu .emo button{border:0;background:none;font-size:26px;width:40px;height:40px;border-radius:50%}
+  #menu .emo button.sel{background:var(--panel)}
+  #menu .it{display:flex;align-items:center;gap:12px;width:100%;border:0;background:none;font-size:17px;padding:10px 12px;border-radius:12px;text-align:left}
+  #menu .it:active{background:var(--panel)}
+  #menu .it svg{width:20px;height:20px}
+  .rx{position:absolute;right:-6px;bottom:-12px;background:var(--fab);box-shadow:var(--shadow);border-radius:99px;padding:1px 7px;font-size:15px}
+  .meq{text-align:right;font-size:13px;color:var(--sub);margin:0 8px 4px}
+  #rq{display:none;align-items:center;gap:8px;max-width:648px;margin:0 auto 8px;background:var(--panel);border-radius:14px;padding:8px 8px 8px 14px;font-size:14px;color:var(--sub)}
+  #rq.on{display:flex}
+  #rq span{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .num{display:inline-grid;place-items:center;min-width:24px;height:24px;border-radius:12px;background:var(--solid);color:var(--on-solid);font-size:13px;font-weight:600;margin-right:8px;padding:0 6px}
 
   /* 底部：輸入框（傳訊息給 Claude Bot）、捲到最新圓鈕 */
@@ -162,7 +178,9 @@
 <main id="main"></main>
 <button class="fab down off" id="down" aria-label="捲到最新">
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+<div id="menu"><div class="card" id="mcard"></div></div>
 <div class="dock" id="dock"><div id="hd">讀取中…</div>
+  <div id="rq"><span id="rqt"></span><button class="x" id="rqx" aria-label="取消回覆">×</button></div>
   <div class="bar"><textarea id="q" rows="1" placeholder="傳訊息給 Claude Bot" aria-label="傳訊息給 Claude Bot"></textarea>
   <button class="go" id="send" aria-label="送出" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button></div></div>
 <div id="toast"></div>
@@ -220,6 +238,7 @@ function renderRound(m, key, r){
   var turn = el('div','turn');
   if(m.tagName === 'DETAILS') turn.appendChild(el('div','when', hm(r.at)||key.replace(/\s.*$/,'')));
   var box = el('div','msg'); turn.appendChild(box);
+  bindMenu(box, {text:null, box:box});
   var pending = drafts.filter(function(d){return !d.decision;}).length;
   var say = el('div','say');
   var n = opened.length || r.opened_count || 0;
@@ -333,7 +352,10 @@ var ASK_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strok
 
 function renderMsg(m, x){
   if(x.role === 'me'){
+    if(x.quote) m.appendChild(el('div','meq','↩ '+x.quote));
     var w = el('div','me'), b = el('div'); b.textContent = x.text;
+    if(x.reaction) b.appendChild(el('span','rx',x.reaction));
+    bindMenu(b, {id:x.id, text:x.text, reaction:x.reaction});
     w.appendChild(b); m.appendChild(w);
     if(x.status === 'pending'){
       var t = el('div','turn'), box = el('div','msg think');
@@ -354,6 +376,8 @@ function renderMsg(m, x){
   if(q){ var a = el('div','ask'); a.innerHTML = ASK_ICON; a.appendChild(el('span',null,'“'+(q.text.length>40?q.text.slice(0,40)+'…':q.text)+'”')); box.appendChild(a); }
   box.appendChild(el('div','txt', lines.join('\n')));
   (x.drafts||[]).forEach(function(d, i){ box.appendChild(replyDraft(d, x.id+'#'+i)); });
+  if(x.reaction) box.appendChild(el('span','rx',x.reaction));
+  bindMenu(box, {id:x.id, text:lines.join('\n'), reaction:x.reaction});
   turn.appendChild(box); m.appendChild(turn);
   acts.forEach(function(a){ m.appendChild(el('div','sys', a)); });
   // 選項按鈕（Grok Bot：「要每天自動讀好友貼文嗎？」三個選項）：只在最新一則回答、你還沒回之前出現；點一下＝送出那句
@@ -503,16 +527,68 @@ SEND.onclick = async function(){
   SENDING = true; fitQ();
   var cid = (Date.now().toString(36) + Math.random().toString(36).slice(2)).replace(/[^a-z0-9]/g,'').slice(0,20);
   var refs = {}; Object.keys(NUM).forEach(function(c){ refs[NUM[c]] = c; });
-  var mine = {id:'m'+cid, role:'me', text:text, at:new Date(Date.now()+8*3600e3).toISOString().slice(0,19), status:'pending'};
+  var mine = {id:'m'+cid, role:'me', text:text, quote:REPLY||'', at:new Date(Date.now()+8*3600e3).toISOString().slice(0,19), status:'pending'};
   DATA.chat = chat().concat([mine]); Q.value=''; fitQ(); render(); bottom();
   try{
-    var r = await api({op:'ask', text:text, cid:cid, refs:JSON.stringify(refs)});
+    var r = await api({op:'ask', text:text, cid:cid, refs:JSON.stringify(refs), quote:REPLY||''});
+    setReply(null);
     if(!r.ok) throw new Error(r.msg==='too long'?'太長了':r.msg||'沒送成');
     DATA.chat = r.chat; render(); bottom(); poll();
   }catch(e){
     DATA.chat = chat().filter(function(x){ return x !== mine; }); Q.value = text; render(); toast('沒送成：'+(e.message||e)+'，再按一次');
   }finally{ SENDING = false; fitQ(); }
 };
+// 兩指點擊（電腦＝右鍵 contextmenu）／長按 0.5 秒（手機）→ 選單
+var REPLY = null, MENU = document.getElementById('menu'), MCARD = document.getElementById('mcard');
+function setReply(t){ REPLY = t ? t.replace(/\s+/g,' ').trim().slice(0,200) : null;
+  document.getElementById('rqt').textContent = REPLY ? '回覆：'+REPLY : ''; document.getElementById('rq').className = REPLY ? 'on' : ''; if(REPLY) Q.focus(); }
+document.getElementById('rqx').onclick = function(){ setReply(null); };
+MENU.addEventListener('click', function(e){ if(e.target === MENU) MENU.className=''; });
+MENU.addEventListener('contextmenu', function(e){ e.preventDefault(); MENU.className=''; });
+var ICON_REPLY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-2"/></svg>';
+var ICON_COPY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></svg>';
+function openMenu(info, x, y){
+  var text = info.text != null ? info.text : (info.box ? info.box.innerText : '');
+  MCARD.textContent = '';
+  if(info.id){
+    var row = el('div','emo');
+    ['👍','👎','❤️','😂','🎉'].forEach(function(e){
+      var b = el('button', info.reaction===e ? 'sel' : null, e); b.setAttribute('aria-label','表情 '+e);
+      b.onclick = function(){ MENU.className=''; react(info.id, info.reaction===e ? '' : e); };
+      row.appendChild(b);
+    });
+    MCARD.appendChild(row);
+  }
+  var r = el('button','it'); r.innerHTML = ICON_REPLY; r.appendChild(el('span',null,'回覆'));
+  r.onclick = function(){ MENU.className=''; setReply(text); };
+  var c = el('button','it'); c.innerHTML = ICON_COPY; c.appendChild(el('span',null,'複製'));
+  c.onclick = function(){ MENU.className=''; copyText(text, function(ok){ toast(ok ? '已複製' : '複製失敗，請再試一次'); }); };
+  MCARD.appendChild(r); MCARD.appendChild(c);
+  MENU.className = 'on';
+  var w = 250, h = MCARD.offsetHeight, vw = window.innerWidth, vh = window.innerHeight;
+  MCARD.style.left = Math.max(12, Math.min(x - w/2, vw - w - 12)) + 'px';
+  MCARD.style.top = Math.max(12, Math.min(y + 12, vh - h - 12)) + 'px';
+}
+function bindMenu(node, info){
+  node.addEventListener('contextmenu', function(e){ e.preventDefault(); openMenu(info, e.clientX, e.clientY); });
+  var t = null, sx = 0, sy = 0;
+  node.addEventListener('touchstart', function(e){
+    if(e.target.closest('textarea,button,a,summary')) return;
+    var p = e.touches[0]; sx = p.clientX; sy = p.clientY;
+    t = setTimeout(function(){ t = null; if(navigator.vibrate) navigator.vibrate(10); openMenu(info, sx, sy); }, 500);
+  }, {passive:true});
+  function cancel(e){ if(!t) return; if(e && e.type==='touchmove'){ var p=e.touches[0]; if(Math.abs(p.clientX-sx)<8 && Math.abs(p.clientY-sy)<8) return; } clearTimeout(t); t = null; }
+  node.addEventListener('touchmove', cancel, {passive:true});
+  node.addEventListener('touchend', cancel);
+  node.addEventListener('touchcancel', cancel);
+}
+async function react(id, emoji){
+  var x = chat().filter(function(y){ return y.id===id; })[0]; if(!x) return;
+  var before = x.reaction; if(emoji) x.reaction = emoji; else delete x.reaction; render();
+  try{ var r = await api({op:'react', id:id, emoji:emoji}); if(!r.ok) throw new Error(r.msg); DATA.chat = r.chat; render(); }
+  catch(e){ if(before) x.reaction = before; else delete x.reaction; render(); toast('表情沒存成，再試一次'); }
+}
+
 var POLL = null;
 function waiting(){ return chat().some(function(x){ return x.role==='me' && x.status==='pending'; }); }
 function editing(){ var a = document.activeElement; return a && a.tagName==='TEXTAREA' && a.id!=='q'; }
