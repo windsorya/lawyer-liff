@@ -479,8 +479,9 @@ function renderMsg(m, x){
   var turn = el('div','turn');
   var box = el('div','msg'+(x.failed?' fail':''));
   // 程式核對後實際做了的動作（本機附在回覆末尾、每行「✓ 」開頭）＝置中系統列，像 Grok Bot 的「已更新 例行任務」
+  // 任務通知不拆：交辦單的「✓ 做完了：…」整則就是報告，拆走後面板只剩標題、報告變灰色小字（律師 10-24：「最下面的說明這麼不起眼」）
   var lines = String(x.text||'').split('\n'), acts = [];
-  while(lines.length && /^✓ /.test(lines[lines.length-1])) acts.unshift(lines.pop().slice(2));
+  if(x.kind !== 'task') while(lines.length && /^✓ /.test(lines[lines.length-1])) acts.unshift(lines.pop().slice(2));
   while(lines.length && !lines[lines.length-1].trim()) lines.pop();
   var q = chat().filter(function(y){ return y.id === x.reply_to; })[0];
   if(x.kind === 'task'){ var tg = el('div','ask'); tg.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>';

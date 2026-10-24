@@ -992,9 +992,25 @@ async def t47():   # Claude Code 交辦單的通知（task_id tccwork，claude_b
     return ok, [ln for ln in txt.splitlines() if "交辦" in ln or "例行任務" in ln][:4]
 
 
+async def t48():   # 交辦單「✓ 做完了：…」整則就是報告，留在面板內正文大小（律師 10-24：最下面的說明不起眼）；一般回答末尾的 ✓ 動作行照舊置中
+    W = {"id": "brwork12345d", "role": "bot", "kind": "task", "task_id": "tccwork", "task_name": "Claude Code 交辦單",
+         "text": "✓ 做完了：已改好，你不用另外做什麼。", "at": "2026-10-24T10:00:00"}
+    A = {"id": "bans12345", "role": "bot", "text": "我把你的原話交給 Claude Code。\n✓ 已開交辦單", "at": "2026-10-24T10:01:00"}
+    async def h(q, log):
+        return await base(q, log, chat=[W, A])
+    p, b, pg, log, ups = await mk(h, fast=True)
+    await pg.wait_for_timeout(400)
+    v = await pg.evaluate("""() => { const f = s => [...document.querySelectorAll(s)].map(e => e.textContent);
+      return {txt: f('.msg .txt'), sys: f('.sys')}; }""")
+    await done(p, b)
+    ok = (any("做完了：已改好" in t for t in v["txt"]) and not any("做完了" in s for s in v["sys"])
+          and "已開交辦單" in v["sys"] and not any("已開交辦單" in t for t in v["txt"]))
+    return ok, v
+
+
 MATRIX = [t01, t02, t03, t04, t05, t06, t07, t08, t09, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20,
           t21, t22, t23, t24, t25, t26, t27, t28, t29, t30, t31, t32, t33, t34, t35, t36, t37,
-          t38, t39, t40, t41, t42, t43, t44, t45, t46, t47]
+          t38, t39, t40, t41, t42, t43, t44, t45, t46, t47, t48]
 EXISTING = [t_cid_reused_after_timeout, t_failure_keeps_new_draft_and_quote, t_stale_poll_does_not_drop_new_message,
             t_teach_menu_keeps_draft, t_teach_record_flow, t_teach_review_84b793d, t_teach_out_of_order, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
             t_fail_after_typing_keeps_draft_and_unsent_full, t_fail_untouched_keeps_whole_message,
