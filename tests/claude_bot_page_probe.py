@@ -1496,14 +1496,17 @@ async def t74():   # #4492③：缺 tries／max_tries／timeout_min／idle_s／a
         {"id": "w1", "text": "缺欄的那張", "status": "running", "elapsed_s": 600, "steps": 12},
         {"id": "w2", "text": "排隊缺 ahead", "status": "queued"}]}
     w0 = {"at": "x", "rx": now_ms - 5000, "now": now_ms, "seq": now_ms + 1, "items": [
-        {"id": "w1", "text": "真的剛開工", "status": "running", "tries": 1, "max_tries": 1, "elapsed_s": 5, "steps": 0}]}
+        {"id": "w1", "text": "真的剛開工", "status": "running", "tries": 1, "max_tries": 1, "elapsed_s": 5, "steps": 0},
+        {"id": "w2", "text": "只有一次但缺 tries", "status": "running", "max_tries": 1, "elapsed_s": 5, "steps": 0}]}
     p, b, pg = await _wk_page(None)
     t1 = await pg.evaluate("a => { workObserve({ok: true, work: a}); return %s; }" % WK_TXT, w)
     t2 = await pg.evaluate("a => { workObserve({ok: true, work: a}); return %s; }" % WK_TXT, w0)
     await done(p, b)
     ok1 = ("第幾次不明" in t1 and "每輪上限不明" in t1 and "已做 12 個動作・最後動作時間不明" in t1 and "前面還有幾件不明" in t1
            and "剛開工" not in t1 and "下一件就是它" not in t1)
-    ok2 = "剛開工，還沒看到動作" in t2 and "第幾次" not in t2 and "（每輪上限不明）" in t2
+    first2, second2 = (t2.split("只有一次但缺 tries") + [""])[:2]
+    ok2 = ("剛開工，還沒看到動作" in first2 and "第幾次" not in first2 and "（每輪上限不明）" in first2
+           and "第幾次不明，最多 1 次" in second2)   # Codex 審 f7c7146：max=1 也不保證 tries=1，缺就寫不明
     return ok1 and ok2, (t1, t2)
 
 
@@ -1635,10 +1638,53 @@ async def t83():   # Codex 審 bf84905 P2：等回覆＋正在編輯別的文字
     return ("state" in ops and v["pushed"] == "2026-10-25T02:30:00" and v["ed"] and v["val"] == "打到一半"
             and "10-25 02:30" in v["hd"]), (ops[:8], v)
 
+
+async def t84():   # Codex 審 f7c7146 P2：未確認的那則已「放回輸入框」再手動重登 ⇒ 只帶一份，不重複
+    c, h = _cloud()
+    p, b, pg, log = await page_with(h, liff=liff_js(profile_ok=False))
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(800)
+    c["mode"] = "forbidden"
+    await pg.fill("#q", "不要重複這則"); await pg.click("#send"); await pg.wait_for_timeout(1200)
+    await pg.locator("button", has_text="放回輸入框").first.click(); await pg.wait_for_timeout(200)
+    await pg.click("#hd"); await pg.wait_for_timeout(300)
+    v = await pg.evaluate("({login: window.__login.length, keep: JSON.parse(sessionStorage.getItem('cb_keep') || 'null')})")
+    await done(p, b)
+    return v["login"] == 1 and v["keep"] and v["keep"]["t"] == "不要重複這則", v
+
+
+async def t85():   # Codex 審 f7c7146 P2：編輯草稿中輪詢換了 DATA（不重畫）⇒ 按舊卡片的「不用回」仍要記到目前資料、重畫後顯示已標記
+    pend = {"id": "mq1", "role": "me", "text": "還在等的題", "status": "pending", "at": "2026-10-24T10:00:00"}
+    dec = {}
+
+    def st():
+        d = {"card_id": "c1", "chat": "甲", "draft": "稿"}
+        if "c1" in dec:
+            d["decision"] = dec["c1"]
+        return {"day": "2026-10-24", "rounds": {"10:00": {"at": "2026-10-24T10:00:00", "result": "done", "drafts": [d]}}}
+
+    async def h(q, log):
+        op = q.get("op")
+        if op == "decide":
+            dec[q["card"]] = q["decision"]
+            return {"ok": True, "recorded": {"decision": q["decision"], "at": "2026-10-25T03:00:00"}}
+        if op == "state":
+            return dict(STATE, chat=[dict(BOT), pend], state=st())
+        return await base(q, log, chat=[dict(BOT), pend])
+    p, b, pg, log = await page_with(h, fast=True)
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(800)
+    await pg.evaluate("() => { window.__d0 = DATA; document.querySelector('#main textarea').focus(); SYNCST.stateMono = mono() - 31000; }")
+    await pg.wait_for_timeout(600)
+    replaced = await pg.evaluate("DATA !== window.__d0 && editing()")
+    await pg.locator("button", has_text="不用回").first.click(); await pg.wait_for_timeout(300)
+    v = await pg.evaluate("({cur: Object.keys(DATA.state.rounds).map(function(k){return DATA.state.rounds[k].drafts||[];}).reduce(function(a,x){return a.concat(x);},[])"
+                          ".filter(function(z){return z.card_id==='c1';}).map(function(z){return z.decision;}), txt: document.getElementById('main').innerText})")
+    await done(p, b)
+    return replaced and v["cur"] == ["no"] and "標記為不用回" in v["txt"], (replaced, v["cur"], v["txt"][-60:])
+
 MATRIX = [t01, t02, t03, t04, t05, t06, t07, t08, t09, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20,
           t21, t22, t23, t24, t25, t26, t27, t28, t29, t30, t31, t32, t33, t34, t35, t36, t37,
           t38, t39, t40, t41, t42, t43, t44, t45, t46, t47, t48, t49, t50, t51, t52, t53, t54, t55, t56, t57, t58, t59, t60, t61, t62, t63, t64,
-          t65, t66, t67, t68, t69, t70, t71, t72, t73, t74, t75, t76, t77, t78, t79, t80, t81, t82, t83]
+          t65, t66, t67, t68, t69, t70, t71, t72, t73, t74, t75, t76, t77, t78, t79, t80, t81, t82, t83, t84, t85]
 EXISTING = [t_cid_reused_after_timeout, t_failure_keeps_new_draft_and_quote, t_stale_poll_does_not_drop_new_message,
             t_teach_menu_keeps_draft, t_teach_record_flow, t_teach_review_84b793d, t_teach_out_of_order, t_teach_stop_response_late, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
             t_fail_after_typing_keeps_draft_and_unsent_full, t_fail_untouched_keeps_whole_message,

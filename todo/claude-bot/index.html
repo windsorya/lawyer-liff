@@ -473,10 +473,9 @@ function renderWork(m){ var box = el('div'); box.id = 'wkbox'; m.appendChild(box
 /** 第幾次／最多幾次：只有一次機會就不寫；缺哪個欄位就把那個寫成不明（設計者 ec1352 C；Codex 審 47fbc6f：缺欄不得整段消失） */
 function wkTries(x){
   var t = typeof x.tries === 'number', mx = typeof x.max_tries === 'number';
-  if(mx && x.max_tries <= 1 && (!t || x.tries <= 1)) return '';
-  if(t && mx) return '（第 '+x.tries+'／'+x.max_tries+' 次）';
-  if(t) return '（第 '+x.tries+' 次，上限不明）';
-  return mx ? '（第幾次不明，最多 '+x.max_tries+' 次）' : '（第幾次不明）';
+  if(!t) return mx ? '（第幾次不明，最多 '+x.max_tries+' 次）' : '（第幾次不明）';   // 缺 tries 一律不明：前端沒有「max=1 ⇒ tries=1」的保證（Codex 審 f7c7146）
+  if(mx && x.max_tries <= 1 && x.tries <= 1) return '';
+  return mx ? '（第 '+x.tries+'／'+x.max_tries+' 次）' : '（第 '+x.tries+' 次，上限不明）';
 }
 // 確保容器存在後更新：整頁重畫被跳過（打字中）或還沒建過容器時，直接接在對話最後面（Codex 審 d6bb827）
 function paintWork(){
@@ -876,11 +875,18 @@ async function save(name, value, onOk){
   finally{ SAVING = false; }
 }
 
+function draftsById(id){
+  var out = [], st = DATA && DATA.state;
+  Object.keys((st && st.rounds) || {}).forEach(function(k){ (st.rounds[k].drafts || []).forEach(function(z){ if(z.card_id === id) out.push(z); }); });
+  return out;
+}
 async function decide(d, decision, copied){
   try{
     var r = await api({op:'decide', card:d.card_id, decision:decision});
     if(!r.ok){ toast('沒記成：'+(r.msg||'')); return; }
-    var rec = r.already || r.recorded; d.decision = rec.decision; d.decided_at = rec.at;
+    var rec = r.already || r.recorded;
+    // 按鈕綁的是畫出那刻的物件；輪詢期間 DATA 可能已換新（編輯中不重畫）⇒ 依 card_id 一併改目前資料裡的同一張（Codex 審 f7c7146 P2）
+    [d].concat(draftsById(d.card_id)).forEach(function(z){ z.decision = rec.decision; z.decided_at = rec.at; });
     render();
     var base = r.already ? '這則先前已按過，以那次為準' : '已記下';
     toast(decision==='ok' ? (copied ? '已複製，到 LINE 貼上即可' : base+'；複製失敗，請按「複製」') : base);
@@ -1224,7 +1230,9 @@ function relogin(byUser){
     return; }
   SYNCST.auth = 'expired'; paintSync();
   // 跳轉會清掉頁面上的一切：還沒確認送到的每一則＋輸入框的字全部帶過去，回來放回輸入框（Codex 審 bf84905 P1：原本只帶一份）；圖帶不過去，頁尾已先講
-  var parts = pendingList().map(function(m){ return m.snapshot.rawText; }).concat([COMPOSER.rawText]).filter(function(t){ return t && t.trim(); });
+  // 已「放回輸入框」的那則以輸入框為準（不重複帶）；同一段字只帶一次（Codex 審 f7c7146 P2）
+  var parts = pendingList().filter(function(m){ return m.mid !== COMPOSER.originMid; }).map(function(m){ return m.snapshot.rawText; })
+    .concat([COMPOSER.rawText]).filter(function(t, i, a){ return t && t.trim() && a.indexOf(t) === i; });
   var q0 = COMPOSER.quote || (pendingList()[0] && pendingList()[0].snapshot.quote) || null;
   try{ localStorage.setItem('cb_relogin_at', String(Date.now())); if(parts.length) sessionStorage.setItem('cb_keep', JSON.stringify({t:parts.join('\n\n'), q:q0})); }catch(e){}
   try{ liff.logout(); }catch(e){}
