@@ -1206,8 +1206,9 @@ async function authTrouble(){
     var t = null; try{ t = liff.getAccessToken(); }catch(e){}
     if(t && t !== TOKEN){ TOKEN = t; SYNCST.auth = ''; kick(true); return; }
     if(SYNCST.auth !== 'expired' && SYNCST.auth !== 'hold'){
-      var bad = true;
+      var bad = true, okBefore = SYNCST.okMono;
       if(typeof liff.getProfile === 'function'){ try{ await liff.getProfile(); bad = false; }catch(e){} }
+      if(SYNCST.okMono !== okBefore) return;   // 等 LINE 回覆期間已經又讀成功＝登入其實沒壞，晚到的舊判斷作廢（Codex 審 bf84905 P2）
       if(!bad){ SYNCST.auth = 'denied'; if(!DATA){ BOOT.msg = '只有王律師本人可以看'; render(); } paintSync(); return; }
     }
     relogin(false);
@@ -1222,18 +1223,22 @@ function relogin(byUser){
     if(!DATA){ BOOT.msg = '登入過期——點這一行重新登入（'+why+'）'; render(); }   // 還沒載入過：主畫面與頁尾直接講要點哪裡（10-25 實站實跑看到停在「正在確認」）
     return; }
   SYNCST.auth = 'expired'; paintSync();
-  var keep = COMPOSER.rawText ? {t:COMPOSER.rawText, q:COMPOSER.quote} : null;
-  if(!keep){ var pm = pendingList()[0]; if(pm) keep = {t:pm.snapshot.rawText, q:pm.snapshot.quote}; }   // 還沒送完的那則：登入回來放回輸入框
-  try{ localStorage.setItem('cb_relogin_at', String(Date.now())); if(keep && keep.t) sessionStorage.setItem('cb_keep', JSON.stringify(keep)); }catch(e){}
+  // 跳轉會清掉頁面上的一切：還沒確認送到的每一則＋輸入框的字全部帶過去，回來放回輸入框（Codex 審 bf84905 P1：原本只帶一份）；圖帶不過去，頁尾已先講
+  var parts = pendingList().map(function(m){ return m.snapshot.rawText; }).concat([COMPOSER.rawText]).filter(function(t){ return t && t.trim(); });
+  var q0 = COMPOSER.quote || (pendingList()[0] && pendingList()[0].snapshot.quote) || null;
+  try{ localStorage.setItem('cb_relogin_at', String(Date.now())); if(parts.length) sessionStorage.setItem('cb_keep', JSON.stringify({t:parts.join('\n\n'), q:q0})); }catch(e){}
   try{ liff.logout(); }catch(e){}
   if(typeof liff.isInClient === 'function' && liff.isInClient()) location.reload();   // LINE 內建：liff.init 會自動登入（官方：LIFF 瀏覽器不能呼叫 liff.login）
   else liff.login({redirectUri: location.origin + location.pathname});                 // 外部瀏覽器：redirectUri 必須以 Endpoint URL（…/lawyer-liff/todo/）開頭
 }
 function keepRestore(){
-  var k = null; try{ k = JSON.parse(sessionStorage.getItem('cb_keep') || 'null'); sessionStorage.removeItem('cb_keep'); }catch(e){}
-  if(!k || !k.t || !composerEmpty()) return;
-  dispatch({type:'input', text:k.t}); if(k.q) dispatch({type:'quote', quote:k.q});
-  toast('重新登入好了，剛才沒送出的字已放回輸入框');
+  var k = null; try{ k = JSON.parse(sessionStorage.getItem('cb_keep') || 'null'); }catch(e){}
+  if(!k || !k.t) return;
+  if(COMPOSING){ setTimeout(keepRestore, 1000); return; }   // 選字中不奪權：選完再放
+  try{ sessionStorage.removeItem('cb_keep'); }catch(e){}   // 確定放得回去才刪（Codex 審 bf84905 P1：先刪後判斷＝載入前打了字就把舊稿丟了）
+  var cur = COMPOSER.rawText;
+  dispatch({type:'input', text: cur.trim() ? k.t + '\n\n' + cur : k.t}); if(k.q && !COMPOSER.quote) dispatch({type:'quote', quote:k.q});
+  toast('重新登入好了，剛才沒確認送到的字已放回輸入框（雲端若已收到就不必再送）');
 }
 /** 立刻讀一次（回到前景、網路恢復、點頁尾＝force；視窗拿到焦點＝2 秒內剛讀過就不重複）。正在讀：那一輪若是 2 秒前以前出發的，讀完再補一輪。
  *  回到前景一律 force：桌機切回分頁時 focus 常先到、剛讀過一次，不能讓它把「回前景立刻讀」吃掉（探針 t67）。 */
@@ -1278,18 +1283,20 @@ async function pollOnce(){
   try{
     var near = document.body.scrollHeight - (window.scrollY + window.innerHeight) < 200;
     var busyW = waiting() || hasUnknown(), ed = editing(), stateDue = mono() - SYNCST.stateMono > SYNC_STATE_EVERY_MS;
-    if(busyW && (ed || !stateDue)){ var r = await api({op:'chat'}); workObserve(r); if(r.ok && fresh()){ SYNC.lastApplied = pid; var was = JSON.stringify(chat()) + pendSig();
+    if(busyW && !stateDue){ var r = await api({op:'chat'}); workObserve(r); if(r.ok && fresh()){ SYNC.lastApplied = pid; var was = JSON.stringify(chat()) + pendSig();
       applyCloudChat(r.chat, true);
       if(JSON.stringify(chat()) + pendSig() !== was && !editing()){ render(); if(near) bottom(); } paintNote(); }
       // 有待回答的訊息時只抓對話；錄製／學習中另讀一次狀態，狀態列才不會卡在「準備錄製」（Codex 審 84b793d P2）；這次讀到的進度也要收（Codex 審 47fbc6f T04）
       if(teachLive()){ var ts = await api({op:'state'}); workObserve(ts); if(ts.ok){ takeTeach(ts.teach, tep); paintTeach(); } } }
-    else if(ed){ var sw = await api({op:'state'}); workObserve(sw); }   // 打字中只更新進度區（設計者 ec1352 T07）
+    else if(ed && !busyW){ var sw = await api({op:'state'}); workObserve(sw); }   // 打字中只更新進度區（設計者 ec1352 T07）
+    // 其餘＝完整狀態：沒在等回覆、或等回覆已滿 30 秒（含編輯中：照樣收資料，只是不重畫，免得打到一半的框被換掉——Codex 審 bf84905 P2）
     else { var st = await api({op:'state'}); workObserve(st); if(st.ok && fresh()){ SYNC.lastApplied = pid; SYNCST.stateMono = mono(); var ch = st.chat, keep = DATA && DATA.teach;
       var nt = st.teach;   // 先取出：DATA 與 st 是同一個物件，下一行會蓋掉 st.teach
       var was2 = JSON.stringify(chat()) + pendSig();
       DATA = st; DATA.teach = keep; takeTeach(nt, tep);   // 錄製狀態只經 takeTeach 進來（舊快照、亂序都擋）
-      applyCloudChat(ch, true); render();
-      if(near && JSON.stringify(chat()) + pendSig() !== was2) bottom(); } }   // 停在最底下時，新來的訊息要捲進畫面（不然看起來像沒更新）
+      applyCloudChat(ch, true);
+      if(editing()){ header(); paintNote(); paintWork(); }
+      else { render(); if(near && JSON.stringify(chat()) + pendSig() !== was2) bottom(); } } }   // 停在最底下時，新來的訊息要捲進畫面（不然看起來像沒更新）
   }catch(e){ try{ workObserve(null); }catch(e2){} }   // 進度區出錯也不得讓下一輪輪詢斷掉（設計者 ec1352 T01）
   SYNCST.busy = false;
   if(SYNCST.again){ SYNCST.again = false; poll(0); } else poll();

@@ -1573,10 +1573,72 @@ async def t79():   # 還沒載入過就登入過期、且 10 分鐘內剛重登�
     await done(p, b)
     return ("點這一行重新登入" in v["main"] and "點這一行重新登入" in v["hd"] and v["cls"] == "warn" and v["login"] == 0 and n == 1), (v, n)
 
+
+async def t80():   # Codex 審 bf84905 P2：等 LINE 回覆（getProfile）期間另一輪已讀成功 ⇒ 晚到的「token 壞了」不得把人登出
+    c, h = _cloud()
+    lj = liff_js(profile_ok=False).replace("getProfile:()=>Promise.reject(new Error('401'))",
+                                           "getProfile:()=>new Promise(function(res,rej){window.__rejProfile=rej;})")
+    p, b, pg, log = await page_with(h, fast=True, liff=lj)
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(800)
+    c["mode"] = "forbidden"; await pg.wait_for_timeout(300)
+    c["mode"] = "ok"; await pg.wait_for_timeout(600)   # 這段期間有一輪讀成功
+    await pg.evaluate("window.__rejProfile && window.__rejProfile(new Error('401')); 0"); await pg.wait_for_timeout(500)
+    v = await pg.evaluate("({login: window.__login.length, logout: window.__logout, hd: %s, had: !!window.__rejProfile})" % HD)
+    await done(p, b)
+    return v["had"] and v["login"] == 0 and v["logout"] == 0 and "已同步" in v["hd"], v
+
+
+async def t81():   # Codex 審 bf84905 P1：重登回來、第一次載入完成前就打了字 ⇒ 舊稿不得遺失（兩份都在輸入框）
+    init = "try{sessionStorage.setItem('cb_keep', JSON.stringify({t:'舊稿', q:null}));}catch(e){}"
+    c, h = _cloud(); c["mode"] = "ABORT"   # 第一次載入失敗、5 秒後才重試：律師在這段空檔先打字
+    p, b, pg, log = await page_with(h, init=init)
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(600)
+    await pg.fill("#q", "新打的"); c["mode"] = "ok"; await pg.wait_for_timeout(5500)
+    v = await pg.evaluate("({q: document.getElementById('q').value, left: sessionStorage.getItem('cb_keep')})")
+    await done(p, b)
+    return "舊稿" in v["q"] and "新打的" in v["q"] and v["left"] is None, v
+
+
+async def t82():   # Codex 審 bf84905 P1：手動點重登時，還沒確認送到的那則＋輸入框的下一則都要帶過去
+    c, h = _cloud()
+    p, b, pg, log = await page_with(h, liff=liff_js(profile_ok=False))
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(800)
+    c["mode"] = "forbidden"
+    await pg.fill("#q", "第一則"); await pg.click("#send"); await pg.wait_for_timeout(1200)
+    await pg.fill("#q", "第二則"); await pg.wait_for_timeout(200)
+    await pg.click("#hd"); await pg.wait_for_timeout(300)
+    v = await pg.evaluate("({login: window.__login.length, keep: sessionStorage.getItem('cb_keep')})")
+    await done(p, b)
+    k = v["keep"] or ""
+    return v["login"] == 1 and "第一則" in k and "第二則" in k, v
+
+
+async def t83():   # Codex 審 bf84905 P2：等回覆＋正在編輯別的文字框 ⇒ 每 30 秒仍讀完整狀態（收資料不重畫，打到一半的框不被換掉）
+    pend = {"id": "mq1", "role": "me", "text": "還在等的題", "status": "pending", "at": "2026-10-24T10:00:00"}
+    st2 = {"day": "2026-10-24", "rounds": {}, "pushedAt": "2026-10-25T02:30:00"}
+    n = {"state": 0}
+
+    async def h(q, log):
+        if q.get("op") == "state":
+            n["state"] += 1
+            return dict(STATE, chat=[dict(BOT), pend], state=(st2 if n["state"] > 1 else STATE["state"]))
+        return await base(q, log, chat=[dict(BOT), pend])
+    p, b, pg, log = await page_with(h, fast=True)
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(800)
+    await pg.evaluate("() => { const t = document.createElement('textarea'); t.id = 'probeEdit'; t.value = '打到一半'; document.body.appendChild(t); t.focus(); }")
+    mark = len(log)
+    await pg.evaluate("if (window.SYNCST) SYNCST.stateMono = mono() - 31000; 0"); await pg.wait_for_timeout(800)
+    ops = [x.get("op") for x in log[mark:]]
+    v = await pg.evaluate("({pushed: DATA.state && DATA.state.pushedAt, ed: editing(), val: document.getElementById('probeEdit').value,"
+                          " hd: %s})" % HD)
+    await done(p, b)
+    return ("state" in ops and v["pushed"] == "2026-10-25T02:30:00" and v["ed"] and v["val"] == "打到一半"
+            and "10-25 02:30" in v["hd"]), (ops[:8], v)
+
 MATRIX = [t01, t02, t03, t04, t05, t06, t07, t08, t09, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20,
           t21, t22, t23, t24, t25, t26, t27, t28, t29, t30, t31, t32, t33, t34, t35, t36, t37,
           t38, t39, t40, t41, t42, t43, t44, t45, t46, t47, t48, t49, t50, t51, t52, t53, t54, t55, t56, t57, t58, t59, t60, t61, t62, t63, t64,
-          t65, t66, t67, t68, t69, t70, t71, t72, t73, t74, t75, t76, t77, t78, t79]
+          t65, t66, t67, t68, t69, t70, t71, t72, t73, t74, t75, t76, t77, t78, t79, t80, t81, t82, t83]
 EXISTING = [t_cid_reused_after_timeout, t_failure_keeps_new_draft_and_quote, t_stale_poll_does_not_drop_new_message,
             t_teach_menu_keeps_draft, t_teach_record_flow, t_teach_review_84b793d, t_teach_out_of_order, t_teach_stop_response_late, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
             t_fail_after_typing_keeps_draft_and_unsent_full, t_fail_untouched_keeps_whole_message,
