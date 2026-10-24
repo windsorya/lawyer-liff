@@ -905,5 +905,7 @@ async def main():
             print(("PASS" if ok else "FAIL"), group, f.__name__, str(got)[:400], flush=True)
     for g, (a, z) in tally.items():
         print(f"SUMMARY {g}: PASS {a} / FAIL {z} / total {a + z}", flush=True)
+    ran = sum(a + z for a, z in tally.values())
+    return 1 if ran == 0 or any(z for _, z in tally.values()) else 0   # 有任何 FAIL（或一項都沒跑到）就非零退出（Codex 審 d2a31e3：FAIL 9 仍 exit 0）
 
-asyncio.run(main())
+sys.exit(asyncio.run(main()))
