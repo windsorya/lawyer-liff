@@ -1040,9 +1040,102 @@ async def t48():   # 交辦單「✓ 做完了：…」整則就是報告，留�
     return ok, v
 
 
+# ── 律師 10-24 22:14「少了許多功能，比如選取文字」／22:19「希望能有進度條，不然不知道是故障還是施工中」──
+import datetime as _dt
+def _iso_ago(ms_ago, base_ms):
+    return _dt.datetime.fromtimestamp((base_ms - ms_ago) / 1000, _dt.timezone(_dt.timedelta(hours=8))).isoformat(timespec="seconds")
+
+
+async def t49():   # 長按／右鍵選單有「選取文字」：開全螢幕面板、整則可選取、完成就關
+    LONG = dict(BOT, text="第一行：甲乙丙\n第二行：丁戊己")
+    async def h(q, log):
+        return await base(q, log, chat=[LONG])
+    p, b, pg, log, ups = await mk(h, fast=True)
+    await pg.wait_for_timeout(400)
+    await pg.dispatch_event(".msg", "contextmenu")
+    await pg.locator("#mcard button", has_text="選取文字").click()
+    v = await pg.evaluate("""() => ({on: document.getElementById('selv').className, t: document.getElementById('selt').textContent,
+      us: getComputedStyle(document.getElementById('selt')).userSelect})""")
+    await pg.click("#selX")
+    off = await pg.evaluate("document.getElementById('selv').className")
+    await done(p, b)
+    return v["on"] == "on" and v["t"] == LONG["text"] and v["us"] == "text" and off == "", (v, off)
+
+
+async def t50():   # 電腦（有滑鼠）上泡泡文字可直接拖曳選取；觸控裝置才關掉（長按要叫選單）
+    async def h(q, log):
+        return await base(q, log, chat=[dict(BOT)])
+    p, b, pg, log, ups = await mk(h, fast=True)
+    await pg.wait_for_timeout(400)
+    v = await pg.evaluate("({hover: matchMedia('(hover:hover)').matches, us: getComputedStyle(document.querySelector('.msg')).userSelect})")
+    await done(p, b)
+    return v["hover"] and v["us"] != "none", v
+
+
+def _work(now_ms, rx_ago=10_000, run_last_ago=30_000):
+    return {"at": _iso_ago(rx_ago, now_ms), "rx": now_ms - rx_ago, "now": now_ms, "items": [
+        {"id": "w1", "text": "希望能有進度條", "status": "running", "tries": 1, "max_tries": 2, "timeout_min": 45,
+         "started_at": _iso_ago(600_000, now_ms), "steps": 12, "last_act": _iso_ago(run_last_ago, now_ms), "doing": "跑指令（測試／檢查）"},
+        {"id": "w2", "text": "補齊選取文字", "status": "queued", "tries": 0, "max_tries": 2, "timeout_min": 45, "ahead": 1},
+        {"id": "w3", "text": "斷網那張", "status": "queued", "tries": 1, "max_tries": 2, "timeout_min": 45, "ahead": 2,
+         "retry_at": "2026-10-25T00:30:00+08:00", "env_note": "額度用完或連不上網"}]}
+
+
+async def t51():   # 進度卡：施工中（步數、最後動作、在做什麼）、排隊第幾、斷網何時再試；Mac 有在回報就不警告
+    import time
+    now_ms = int(time.time() * 1000)
+    async def h(q, log):
+        r = await base(q, log, chat=[dict(BOT)])
+        r["work"] = _work(now_ms)
+        return r
+    p, b, pg, log, ups = await mk(h, fast=True)
+    await pg.wait_for_timeout(500)
+    txt = await pg.evaluate("[...document.querySelectorAll('.wk')].map(e => e.innerText).join('\\n---\\n')")
+    w = await pg.evaluate("[...document.querySelectorAll('.wk .pb i')].map(e => e.style.width)")
+    await done(p, b)
+    ok = ("施工中（第 1／2 次）" in txt and "已做 12 步" in txt and "跑指令" in txt and "前面還有 1 件" in txt
+          and "00:30 自動再試" in txt and "沒有回報" not in txt and "可能卡住" not in txt and txt.count("交辦單進度") == 3
+          and w[0] not in ("", "0%") and w[1] == "0%")
+    return ok, (txt, w)
+
+
+async def t52():   # Mac 5 分鐘沒回報 ⇒ 卡片明講「Mac 沒有回報」；施工中 10 分鐘沒動作 ⇒「可能卡住」
+    import time
+    now_ms = int(time.time() * 1000)
+    async def h(q, log):
+        r = await base(q, log, chat=[dict(BOT)])
+        r["work"] = _work(now_ms, rx_ago=300_000, run_last_ago=600_000)
+        return r
+    p, b, pg, log, ups = await mk(h, fast=True)
+    await pg.wait_for_timeout(500)
+    txt = await pg.evaluate("[...document.querySelectorAll('.wk')].map(e => e.innerText).join('\\n')")
+    await done(p, b)
+    return "沒有回報進度" in txt and "可能卡住" in txt, txt
+
+
+async def t53():   # 輪詢帶回新進度就重畫：施工中 → 做完了（有進行中的單時不是 30 秒才看一次）
+    import time
+    now_ms = int(time.time() * 1000)
+    n = {"state": 0}
+    fin = {"at": "x", "rx": now_ms, "now": now_ms, "items": [{"id": "w1", "text": "希望能有進度條", "status": "done",
+           "tries": 1, "max_tries": 2, "timeout_min": 45, "finished_at": _iso_ago(0, now_ms)}]}
+    async def h(q, log):
+        r = await base(q, log, chat=[dict(BOT)])
+        if q.get("op") == "state":
+            n["state"] += 1
+            r["work"] = _work(now_ms) if n["state"] == 1 else fin
+        return r
+    fast10 = "(function(){var st=window.setTimeout;window.setTimeout=function(f,d){if(d===10000)d=80;return st.call(window,f,d);};})();"
+    p, b, pg, log, ups = await mk(h, init=fast10)
+    await pg.wait_for_timeout(1500)
+    txt = await pg.evaluate("[...document.querySelectorAll('.wk')].map(e => e.innerText).join('\\n')")
+    await done(p, b)
+    return "做完了" in txt and "施工中" not in txt and n["state"] >= 2, (txt, n)
+
+
 MATRIX = [t01, t02, t03, t04, t05, t06, t07, t08, t09, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20,
           t21, t22, t23, t24, t25, t26, t27, t28, t29, t30, t31, t32, t33, t34, t35, t36, t37,
-          t38, t39, t40, t41, t42, t43, t44, t45, t46, t47, t48]
+          t38, t39, t40, t41, t42, t43, t44, t45, t46, t47, t48, t49, t50, t51, t52, t53]
 EXISTING = [t_cid_reused_after_timeout, t_failure_keeps_new_draft_and_quote, t_stale_poll_does_not_drop_new_message,
             t_teach_menu_keeps_draft, t_teach_record_flow, t_teach_review_84b793d, t_teach_out_of_order, t_teach_stop_response_late, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
             t_fail_after_typing_keeps_draft_and_unsent_full, t_fail_untouched_keeps_whole_message,

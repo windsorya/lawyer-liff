@@ -135,7 +135,27 @@
   .rule:first-child{border-top:0}
   .rule span{flex:1}
   /* 兩指點擊（右鍵）／長按泡泡的選單：Grok Bot 實機＝一排表情＋回覆＋複製 */
-  .msg,.me div{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;position:relative}
+  /* 手機長按＝叫選單，所以只在觸控裝置關掉原生選取；選字改走選單的「選取文字」（ChatGPT／Grok 同款）。電腦上可以直接拖曳選字（律師 10-24 22:14「少了選取文字功能」） */
+  .msg,.me div{position:relative}
+  @media (hover:none){ .msg,.me div{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none} }
+  #selv{position:fixed;inset:0;z-index:11;display:none;background:var(--bg);flex-direction:column}
+  #selv.on{display:flex}
+  #selv .hd{display:flex;align-items:center;gap:8px;padding:calc(10px + env(safe-area-inset-top)) 12px 10px;border-bottom:1px solid var(--line)}
+  #selv .hd b{flex:1;font-size:17px}
+  #selv .hd button{border:0;border-radius:99px;padding:8px 14px;background:var(--panel);color:var(--ink);font-size:15px}
+  #selt{flex:1;overflow:auto;padding:16px 16px calc(24px + env(safe-area-inset-bottom));font-size:17px;line-height:1.65;white-space:pre-wrap;word-break:break-word;
+    -webkit-user-select:text;user-select:text;-webkit-touch-callout:default}
+  /* 交辦單施工進度（律師 10-24 22:19「希望能有進度條，不然完全不知道是故障還是施工中」） */
+  .wk{margin:4px 0 16px;padding:12px 14px;border:1px solid var(--line);border-radius:16px;background:var(--fab);font-size:15px;line-height:1.5}
+  .wk .wkh{display:flex;align-items:center;gap:6px;color:var(--sub);font-size:13px}
+  .wk .wkh svg{width:15px;height:15px}
+  .wk .wkt{margin:2px 0 8px;font-size:16px}
+  .wk .pb{height:8px;border-radius:99px;background:var(--panel);overflow:hidden}
+  .wk .pb i{display:block;height:100%;border-radius:99px;background:#2563eb;transition:width .6s}
+  .wk .pb i.run{background:linear-gradient(90deg,#2563eb 0%,#60a5fa 50%,#2563eb 100%);background-size:200% 100%;animation:wkr 1.6s linear infinite}
+  @keyframes wkr{to{background-position:-200% 0}}
+  .wk .pb i.ok{background:#16a34a} .wk .pb i.bad{background:#dc2626} .wk .pb i.idle{background:var(--faint)}
+  .wk .wks{margin-top:6px} .wk .wkn{color:var(--sub);font-size:14px} .wk .warn{color:var(--warn)}
   #menu{position:fixed;inset:0;z-index:9;display:none}
   #menu.on{display:block}
   #menu .card{position:absolute;width:250px;background:var(--fab);box-shadow:0 8px 32px rgba(0,0,0,.18),0 0 0 1px rgba(0,0,0,.05);border-radius:20px;padding:10px 8px 6px;margin:0}
@@ -241,6 +261,7 @@
   <div class="row"><button class="no" id="teachNo">取消</button><button class="go" id="teachGo">開始錄製</button></div>
 </div></div>
 <div id="menu"><div class="card" id="mcard"></div></div>
+<div id="selv" role="dialog" aria-label="選取文字"><div class="hd"><b>選取文字</b><button id="selAll">全部複製</button><button id="selX">完成</button></div><div id="selt"></div></div>
 <div class="dock" id="dock"><div id="hd">讀取中…</div><div id="cn" class="cn"></div>
   <div class="bar" id="barbox"><div id="rq"><span id="rqt"></span><button class="x" id="rqx" aria-label="取消回覆">×</button></div><div id="ap"><img id="api" alt="要附的圖"><button class="x" id="apx" aria-label="取消附圖">×</button></div><button class="plus" id="plus" aria-label="附加圖片"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button><input type="file" id="file" accept="image/*" hidden><textarea id="q" rows="1" placeholder="傳訊息給 Claude Bot" aria-label="傳訊息給 Claude Bot"></textarea>
   <button class="go" id="send" aria-label="送出" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button></div></div>
@@ -367,7 +388,7 @@ function draftCard(d){
 function renderChat(m){
   // 還沒有巡查輪次時照樣顯示對話（舊版在這裡直接 return，早上 10 點前整串對話都看不到）
   var st = DATA.state && DATA.state.rounds ? DATA.state : {rounds:{}};
-  if(!Object.keys(st.rounds).length && !chat().length){ if(!pendingList().length) m.appendChild(el('div','empty','今天還沒有跑過')); renderPending(m); return; }
+  if(!Object.keys(st.rounds).length && !chat().length){ if(!pendingList().length && !workItems().length) m.appendChild(el('div','empty','今天還沒有跑過')); renderPending(m); renderWork(m); return; }
   // 主角是要回的草稿：沒有草稿的輪次併成一行（可展開），有草稿的輪次照時間排在下面
   var keys = Object.keys(st.rounds).sort(function(x,y){ var a=(st.rounds[x].at||'')+x, b=(st.rounds[y].at||'')+y; return a<b?-1:a>b?1:0; })   /* 照執行時間排，過午夜的輪次排在後面 */;
   function done(k){ var x = st.rounds[k].result; return (!x || x === 'done' || x === 'no_unread') && !(st.rounds[k].manual||[]).length; }   /* 有開不了要手動看的列＝要露出來（#4344） */
@@ -393,6 +414,51 @@ function renderChat(m){
   var pend = 0; keys.forEach(function(k){ (st.rounds[k].drafts||[]).forEach(function(d){ if(!d.decision) pend++; }); });
   if(!pend && keys.every(done) && !chat().length && !pendingList().length) m.appendChild(el('div','empty','目前沒有要你回的'));
   renderPending(m);
+  renderWork(m);
+}
+
+// ── 交辦單施工進度：本機每 20 秒把交辦單帳本鏡像到 GAS（work）；時間一律用 GAS 的鐘（rx＝收件、now＝讀取），Mac 睡著看得出來 ──
+var WORK = null, WORK_AT = 0;   // WORK_AT：本頁收到 WORK 的本機時刻（兩次輪詢之間把 GAS 的 now 往前推）
+function takeWork(w){ if(w === undefined) return; WORK = w; WORK_AT = Date.now(); }
+function workItems(){ return (WORK && WORK.items) || []; }
+function workLive(){ return workItems().some(function(x){ return x.status === 'queued' || x.status === 'running'; }); }
+function gasNow(){ return WORK ? WORK.now + (Date.now() - WORK_AT) : Date.now(); }
+function ago(ms){ var s = Math.max(0, Math.round(ms/1000)); return s < 60 ? s+' 秒' : s < 3600 ? Math.round(s/60)+' 分鐘' : Math.floor(s/3600)+' 小時 '+Math.round(s%3600/60)+' 分'; }
+function hm(iso){ var t = Date.parse(iso); if(isNaN(t)) return ''; var d = new Date(t + 8*3600e3); return ('0'+d.getUTCHours()).slice(-2)+':'+('0'+d.getUTCMinutes()).slice(-2); }
+var WORK_STALE_MS = 3*60*1000;   // 本機每 20 秒推、沒變也每分鐘心跳；3 分鐘沒收到＝Mac 沒在回報
+var WORK_QUIET_MS = 8*60*1000;   // 施工中 8 分鐘沒有任何新動作才提醒可能卡住（跑全套測試、等 Codex 審查實測可到 5–6 分鐘）
+function renderWork(m){
+  var items = workItems(); if(!items.length) return;
+  var now = gasNow(), stale = now - WORK.rx > WORK_STALE_MS;
+  items.forEach(function(x){
+    var c = el('div','wk'), h = el('div','wkh');
+    h.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>';
+    h.appendChild(el('span',null,'Claude Code・交辦單進度')); c.appendChild(h);
+    c.appendChild(el('div','wkt','「'+x.text+'」'));
+    var pb = el('div','pb'), bar = el('i'), line = '', note = '', warn = false;
+    if(x.status === 'running'){
+      var used = now - Date.parse(x.started_at), lim = (x.timeout_min||45)*60000;
+      bar.style.width = Math.max(4, Math.min(96, used/lim*100)) + '%'; bar.className = stale ? 'idle' : 'run';
+      line = '施工中'+(x.max_tries > 1 ? '（第 '+x.tries+'／'+x.max_tries+' 次）' : '')+'・已用 '+ago(used)+'（最長 '+(x.timeout_min||45)+' 分）';
+      if(x.last_act){ var q = now - Date.parse(x.last_act);
+        note = '已做 '+(x.steps||0)+' 步・最後一個動作 '+ago(q)+'前'+(x.doing ? '（'+x.doing+'）' : '');
+        if(q > WORK_QUIET_MS){ warn = true; note += '。已經 '+ago(q)+'沒有新動作，可能卡住了'; } }
+      else note = '剛開工，還沒看到動作';
+    } else if(x.status === 'queued'){
+      bar.style.width = '0%';
+      if(x.retry_at){ line = '暫停：'+(x.env_note||'額度用完或連不上網')+'，'+hm(x.retry_at)+' 自動再試'; }
+      else line = x.ahead > 0 ? '排隊中：前面還有 '+x.ahead+' 件' : '排隊中：下一件就是它';
+    } else {
+      bar.style.width = '100%'; bar.className = x.status === 'done' ? 'ok' : 'bad';
+      line = x.status === 'done' ? '✓ 做完了（'+hm(x.finished_at)+'），結果貼在上面' : x.status === 'needs_owner' ? '要你本人處理一步（'+hm(x.finished_at)+'），詳見上面' : '✗ 沒做成（'+hm(x.finished_at)+'），原因貼在上面';
+    }
+    pb.appendChild(bar); c.appendChild(pb);
+    c.appendChild(el('div','wks', line));
+    if(note) c.appendChild(el('div','wkn'+(warn ? ' warn' : ''), note));
+    if(stale && (x.status === 'running' || x.status === 'queued'))
+      c.appendChild(el('div','wkn warn','Mac 已經 '+ago(now - WORK.rx)+'沒有回報進度（可能闔上或睡眠）；開機後會接著做，這裡也會更新'));
+    m.appendChild(c);
+  });
 }
 
 /** 置中時間分隔線（Grok Bot：「昨天 下午11:49」）：第一則、換日、或相隔 20 分鐘以上才出現。 */
@@ -747,7 +813,7 @@ async function decide(d, decision, copied){
 async function load(){
   var r = await api({op:'state'});
   if(!r.ok){ document.getElementById('hd').textContent=(r.msg==='forbidden'?'只有王律師本人可以看':r.msg||'讀取失敗'); return false; }
-  DATA = r;
+  DATA = r; takeWork(r.work);
   return true;
 }
 
@@ -934,6 +1000,13 @@ MENU.addEventListener('click', function(e){ if(e.target === MENU) MENU.className
 MENU.addEventListener('contextmenu', function(e){ e.preventDefault(); MENU.className=''; });
 var ICON_REPLY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-2"/></svg>';
 var ICON_COPY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></svg>';
+var ICON_SELECT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7V5a1 1 0 0 1 1-1h2M17 4h2a1 1 0 0 1 1 1v2M20 17v2a1 1 0 0 1-1 1h-2M7 20H5a1 1 0 0 1-1-1v-2"/><path d="M9 9h6M9 12h6M9 15h4"/></svg>';
+var ICON_SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4M8 8l4-4 4 4"/><path d="M5 12v7a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-7"/></svg>';
+/** 選取文字：整則放進可選取的全螢幕面板，手機用原生的選字把手挑一段複製（泡泡本身要留給長按選單）。 */
+var SELV = document.getElementById('selv'), SELT = document.getElementById('selt');
+function openSelect(text){ SELT.textContent = text; SELV.className = 'on'; SELT.scrollTop = 0; }
+document.getElementById('selX').onclick = function(){ SELV.className = ''; window.getSelection && window.getSelection().removeAllRanges(); };
+document.getElementById('selAll').onclick = function(){ copyText(SELT.textContent, function(ok){ toast(ok ? '已複製' : '複製失敗，請用選字把手複製'); }); };
 function openMenu(info, x, y, mode){
   mode = mode || 'all';
   var text = info.text != null ? info.text : (info.box ? info.box.innerText : '');
@@ -954,6 +1027,16 @@ function openMenu(info, x, y, mode){
   c.onclick = function(){ MENU.className=''; copyText(text, function(ok){ toast(ok ? '已複製' : '複製失敗，請再試一次'); }); };
   if(mode === 'all') MCARD.appendChild(r);
   if(mode !== 'emoji') MCARD.appendChild(c);
+  if(mode !== 'emoji' && text){
+    var sl = el('button','it'); sl.innerHTML = ICON_SELECT; sl.appendChild(el('span',null,'選取文字'));
+    sl.onclick = function(){ MENU.className=''; openSelect(text); };
+    MCARD.appendChild(sl);
+    if(navigator.share){
+      var sh = el('button','it'); sh.innerHTML = ICON_SHARE; sh.appendChild(el('span',null,'分享'));
+      sh.onclick = function(){ MENU.className=''; navigator.share({text:text}).catch(function(){}); };
+      MCARD.appendChild(sh);
+    }
+  }
   MENU.className = 'on';
   var w = MCARD.offsetWidth || 250, h = MCARD.offsetHeight, vw = window.innerWidth, vh = window.innerHeight;
   MCARD.style.left = Math.max(12, Math.min(x - w/2, vw - w - 12)) + 'px';
@@ -972,7 +1055,10 @@ function hoverBar(node, info){
 }
 function bindMenu(node, info){
   hoverBar(node, info);
-  node.addEventListener('contextmenu', function(e){ e.preventDefault(); openMenu(info, e.clientX, e.clientY); });
+  node.addEventListener('contextmenu', function(e){
+    var sel = window.getSelection && window.getSelection();
+    if(sel && !sel.isCollapsed && node.contains(sel.anchorNode)) return;   // 已選了一段字：用瀏覽器原生選單複製那一段
+    e.preventDefault(); openMenu(info, e.clientX, e.clientY); });
   var t = null, sx = 0, sy = 0;
   node.addEventListener('touchstart', function(e){
     if(e.target.closest('textarea,button,a,summary')) return;
@@ -1016,16 +1102,17 @@ function poll(){
       var near = document.body.scrollHeight - (window.scrollY + window.innerHeight) < 200;
       if(waiting() || hasUnknown()){ var r = await api({op:'chat'}); if(r.ok && fresh()){ SYNC.lastApplied = pid; var was = JSON.stringify(chat()) + pendSig();
         applyCloudChat(r.chat, true);
+        var ws = JSON.stringify(WORK); takeWork(r.work); if(JSON.stringify(WORK) !== ws) was = '';
         if(JSON.stringify(chat()) + pendSig() !== was && !editing()){ render(); if(near) bottom(); } paintNote(); }
         // 有待回答的訊息時只抓對話；錄製／學習中另讀一次狀態，狀態列才不會卡在「準備錄製」（Codex 審 84b793d P2）
         if(teachLive()){ var ts = await api({op:'state'}); if(ts.ok){ takeTeach(ts.teach, tep); paintTeach(); } } }
       else if(!editing()){ var st = await api({op:'state'}); if(st.ok && fresh()){ SYNC.lastApplied = pid; var ch = st.chat, keep = DATA && DATA.teach;
         var nt = st.teach;   // 先取出：DATA 與 st 是同一個物件，下一行會蓋掉 st.teach
-        DATA = st; DATA.teach = keep; takeTeach(nt, tep);   // 錄製狀態只經 takeTeach 進來（舊快照、亂序都擋）
+        DATA = st; DATA.teach = keep; takeTeach(nt, tep); takeWork(st.work);   // 錄製狀態只經 takeTeach 進來（舊快照、亂序都擋）
         applyCloudChat(ch, true); render(); } }
     }catch(e){}
     poll();
-  }, (waiting() || hasUnknown()) ? 4000 : (teachLive() ? 5000 : 30000));   // 錄製／學習中 5 秒一次，狀態列才跟得上
+  }, (waiting() || hasUnknown()) ? 4000 : (teachLive() ? 5000 : (workLive() ? 10000 : 30000)));   // 錄製／學習中 5 秒、交辦單施工中 10 秒一次，狀態列與進度條才跟得上
 }
 document.addEventListener('visibilitychange', function(){ if(!document.hidden && TOKEN) poll(); });
 function bottom(){ window.scrollTo({top:document.body.scrollHeight, behavior:'smooth'}); }
