@@ -392,7 +392,15 @@ function renderMsg(m, x){
     if(x.reaction) b.appendChild(el('span','rx',x.reaction));
     bindMenu(b, {id:x.id, text:x.text, reaction:x.reaction});
     w.appendChild(b); m.appendChild(w);
-    if(x.status === 'unsent'){ var u = el('div','turn'); u.appendChild(el('div','msg think','⚠️ 這則沒送成（'+(x.why||'')+'）——長按可複製，再貼到輸入框重送')); m.appendChild(u); return; }
+    if(x.status === 'unsent'){
+      var u = el('div','turn'), ub = el('div','msg think','⚠️ 這則沒送成（'+(x.why||'')+'）');
+      var back = el('button', null, '放回輸入框'); back.style.marginLeft = '8px';
+      back.onclick = function(){
+        if(Q.value.trim() || ATT){ toast('輸入框還有內容，先送出或清掉再放回'); return; }
+        UNSENT = UNSENT.filter(function(y){ return y !== x; });
+        Q.value = x.text === '（看這張圖）' ? '' : x.text; if(x.attObj) setAtt(x.attObj); setReply(x.quote || null); fitQ(); render();
+      };
+      ub.appendChild(back); u.appendChild(ub); m.appendChild(u); return; }
     if(x.status === 'pending'){
       var t = el('div','turn'), box = el('div','msg think');
       var waited = (Date.now() - Date.parse(String(x.at||'').replace(' ','T')+'+08:00'))/1000;
@@ -419,7 +427,7 @@ function renderMsg(m, x){
   turn.appendChild(box); m.appendChild(turn);
   acts.forEach(function(a){ m.appendChild(el('div','sys', a)); });
   // 選項按鈕（Grok Bot：「要每天自動讀好友貼文嗎？」三個選項）：只在最新一則回答、你還沒回之前出現；點一下＝送出那句
-  var all = chat();
+  var all = (DATA && DATA.chat) || [];   // 只看雲端對話的最後一則（本機「沒送成」接在最後，不能擋掉選項；Codex 審 27f3905）
   if((x.choices||[]).length && all[all.length-1] === x){
     var o = el('div','opts');
     x.choices.forEach(function(c){ var b = el('button',null,c); b.onclick = function(){ Q.value = c; fitQ(); SEND.onclick(); }; o.appendChild(b); });
@@ -582,7 +590,7 @@ function fitQ(){ Q.style.height='auto'; Q.style.height=Math.min(Q.scrollHeight,1
 // 附加圖片（Grok Bot 的 ＋→附加檔案）：先壓成長邊 1600px JPEG，送出時 POST 到 GAS（快取 6 小時），Mac 取走後給工作階段看
 var ATT = null, LOCALIMG = {}, FILE = document.getElementById('file');
 function barClass(){ document.getElementById('barbox').className = 'bar' + (REPLY ? ' quoting' : '') + (ATT ? ' att' : ''); }
-function setAtt(a){ ATT = a; document.getElementById('ap').className = a ? 'on' : ''; if(a) document.getElementById('api').src = a.url;
+function setAtt(a){ EDITS++; ATT = a; document.getElementById('ap').className = a ? 'on' : ''; if(a) document.getElementById('api').src = a.url;
   barClass(); fitQ(); }
 var ICON_IMG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/></svg>';
 var ICON_TEACH = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="#dc2626" stroke-width="2"/><circle cx="12" cy="12" r="4" fill="#dc2626"/></svg>';
@@ -622,7 +630,8 @@ async function upload(cid, a){
   if(!r.ok) throw new Error(r.msg === 'forbidden' ? '身分驗證失敗' : '圖沒傳成');
   return r.att;
 }
-Q.oninput = fitQ;
+var EDITS = 0;   // 輸入區被使用者動過的次數（打字、換圖、改引用）
+Q.oninput = function(){ EDITS++; fitQ(); };
 SEND.onclick = async function(){
   var text = Q.value.trim(); if((!text && !ATT) || SENDING || !DATA) return;
   if(!text) text = '（看這張圖）';
@@ -635,8 +644,9 @@ SEND.onclick = async function(){
   var refs = {}; Object.keys(NUM).forEach(function(c){ refs[NUM[c]] = c; });
   if(att) LOCALIMG['m'+cid] = att.url;
   var mine = {id:'m'+cid, role:'me', text:text, quote:quote, att: att ? 'pending' : '', at:new Date(Date.now()+8*3600e3).toISOString().slice(0,19), status:'pending'};
-  UNSENT = UNSENT.filter(function(x){ return !(x.text === text && x.quote === quote); });   // 重送同一則：舊的「沒送成」拿掉
+  UNSENT = UNSENT.filter(function(x){ return !(x.text === text && x.quote === quote && (x.attObj ? x.attObj.b64 : '') === (att ? att.b64 : '')); });   // 重送同一則（含同一張圖）：舊的「沒送成」拿掉
   DATA.chat = (DATA.chat || []).filter(function(x){ return x.id !== mine.id; }).concat([mine]); Q.value=''; setAtt(null); fitQ(); render(); bottom();
+  var edits0 = EDITS;   // 之後有任何輸入、換圖、改引用都會 +1（刪光重打也算動過；Codex 審 27f3905）
   try{
     var attId = att ? await upload(cid, att) : '';
     var r = await api({op:'ask', text:text, cid:cid, refs:JSON.stringify(refs), quote:quote, att:attId});
@@ -651,17 +661,18 @@ SEND.onclick = async function(){
     DATA.chat = (DATA.chat || []).filter(function(x){ return x !== mine; });
     // 輸入區在送出後完全沒動過（沒打字、沒換圖、引用沒改）才整則原封還原；動過就一個欄位都不碰（Codex 審 afaf952：
     // 失敗把舊圖接到新字上、復活已取消的引用），沒送成的那則留在對話裡、內容完整可複製
-    var untouched = Q.value.trim() === '' && !ATT && REPLY === (quote || null);
+    var untouched = EDITS === edits0;
     var why = String(e.message || e);
     if(untouched){ Q.value = text === '（看這張圖）' ? '' : text; if(att) setAtt(att); }
-    else UNSENT.push({id:'u'+cid, role:'me', text:text, quote:quote, att: att ? 'local' : '', status:'unsent', why:why, at:mine.at});
+    else { if(att) LOCALIMG['u'+cid] = att.url;
+      UNSENT.push({id:'u'+cid, role:'me', text:text, quote:quote, att: att ? 'local' : '', attObj: att || null, status:'unsent', why:why, at:mine.at}); }
     render(); fitQ();
     toast('沒送成：'+why+(untouched ? '，再按一次' : '（你剛打的新內容保留著；沒送成的那則留在對話裡）'));
   }finally{ SENDING = false; fitQ(); }
 };
 // 兩指點擊（電腦＝右鍵 contextmenu）／長按 0.5 秒（手機）→ 選單
 var REPLY = null, MENU = document.getElementById('menu'), MCARD = document.getElementById('mcard');
-function setReply(t){ REPLY = t ? t.replace(/\s+/g,' ').trim().slice(0,200) : null;
+function setReply(t){ EDITS++; REPLY = t ? t.replace(/\s+/g,' ').trim().slice(0,200) : null;
   document.getElementById('rqt').textContent = REPLY || ''; document.getElementById('rq').className = REPLY ? 'on' : '';
   barClass(); Q.placeholder = REPLY ? '回覆…' : '傳訊息給 Claude Bot'; if(REPLY) Q.focus(); }
 document.getElementById('rqx').onclick = function(){ setReply(null); };
@@ -757,6 +768,11 @@ document.getElementById('back').onclick=function(){VIEW='chat';history.replaceSt
   try{ await liff.init({liffId:LIFF_ID}); }
   catch(e){ document.getElementById('hd').textContent='LIFF 初始化失敗：'+(e.message||e); return; }
   if(!liff.isLoggedIn()){ liff.login(); return; }
+  if(/ Line\//i.test(navigator.userAgent)){   // LINE 內建瀏覽器沒有「加入主畫面」（10-24 律師實測）；openExternalBrowser=1 是 LINE 官方的外開參數
+    var bar = el('div', 'sys', '在 LINE 裡開的頁面不能「加入主畫面」。');
+    var go = el('a', null, '改用 Safari 開'); go.href = location.origin + location.pathname + '?openExternalBrowser=1'; go.style.marginLeft = '6px';
+    bar.appendChild(go); document.body.insertBefore(bar, document.body.firstChild);
+  }
   TOKEN = liff.getAccessToken();
   if(location.hash==='#tasks') VIEW='tasks';
   render();
