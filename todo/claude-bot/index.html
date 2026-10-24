@@ -646,6 +646,16 @@ function render(){
 
 // 教它一項任務：開始／停止寫 GAS；Mac 每 20 秒讀一次才接手錄製，所以狀態列跟著雲端狀態走（不自己假設已在錄）
 var TEACH_EP = 0;   // 每按一次開始／停止 +1：出發早於這次操作的輪詢回應不得蓋掉本機剛拿到的錄製狀態
+var TEACH_RANK = {start:0, recording:1, stop:2, learning:3, done:4, failed:4, cancel:4};
+/** 收雲端回來的錄製狀態：出發後按過開始／停止就不收；同一場只准往後走、不准倒退（輪詢回應會晚到、亂序——Codex 審 479ae54 P2：
+ *  learning 先到、晚到的 recording 讓狀態倒退）；雲端不會讓已存在的紀錄消失，回 null＝舊快照不收。與雲端轉移表同一套排序。 */
+function takeTeach(nt, tep){
+  if(!DATA || tep !== TEACH_EP) return;
+  var c = DATA.teach;
+  if(c && !nt) return;
+  if(c && nt && c.sid === nt.sid && (TEACH_RANK[nt.state] || 0) < (TEACH_RANK[c.state] || 0)) return;
+  DATA.teach = nt;
+}
 var TEACH_TXT = { start:'準備錄製…Mac 接手後才開始錄（約 20 秒），看到「錄製中」再開始做',
   recording:'錄製中：請在 Mac 的 Chrome 上做一次，做完按停止', stop:'停止中…', learning:'正在學習你的步驟（幾分鐘），學好會貼在對話裡' };
 function teachLive(){
@@ -1001,9 +1011,10 @@ function poll(){
         applyCloudChat(r.chat, true);
         if(JSON.stringify(chat()) + pendSig() !== was && !editing()){ render(); if(near) bottom(); } paintNote(); }
         // 有待回答的訊息時只抓對話；錄製／學習中另讀一次狀態，狀態列才不會卡在「準備錄製」（Codex 審 84b793d P2）
-        if(teachLive()){ var ts = await api({op:'state'}); if(ts.ok && DATA && tep === TEACH_EP){ DATA.teach = ts.teach; paintTeach(); } } }
+        if(teachLive()){ var ts = await api({op:'state'}); if(ts.ok){ takeTeach(ts.teach, tep); paintTeach(); } } }
       else if(!editing()){ var st = await api({op:'state'}); if(st.ok && fresh()){ SYNC.lastApplied = pid; var ch = st.chat, keep = DATA && DATA.teach;
-        DATA = st; if(tep !== TEACH_EP) DATA.teach = keep;   // 出發後按過開始／停止：舊快照不得蓋掉新的錄製狀態（Codex 審 84b793d P2）
+        var nt = st.teach;   // 先取出：DATA 與 st 是同一個物件，下一行會蓋掉 st.teach
+        DATA = st; DATA.teach = keep; takeTeach(nt, tep);   // 錄製狀態只經 takeTeach 進來（舊快照、亂序都擋）
         applyCloudChat(ch, true); render(); } }
     }catch(e){}
     poll();

@@ -150,7 +150,8 @@ async def t_teach_record_flow():
     stops = [x for x in log if x.get("op") == "teach" and x.get("act") == "stop"]
     cur["t"] = dict(cur["t"], state="learning"); await pg.wait_for_timeout(400)
     s3 = (await pg.text_content("#teachTxt"), await pg.is_visible("#teachStop"))
-    cur["t"] = dict(cur["t"], state="start", at="2020-01-01T00:00:00"); await pg.wait_for_timeout(400)
+    # 過時的另一場（Mac 3 分鐘沒接手的 start）：不顯示狀態列。同一場不會倒退回 start（雲端轉移表只往後走），所以用新 sid
+    cur["t"] = {"sid": "s000000000009", "state": "start", "at": "2020-01-01T00:00:00"}; await pg.wait_for_timeout(400)
     s4 = await pg.get_attribute("#teachBar", "class")
     await b.close(); await p.stop()
     ok = (len(starts) == 1 and starts[0].get("goal") == "每天祝壽星生日快樂" and s1[0] == "on" and "準備錄製" in s1[1] and s1[2] == ""
@@ -196,6 +197,26 @@ async def t_teach_review_84b793d():
     r3 = await pg.text_content("#toast")
     await b.close(); await p.stop()
     return r2 == "on" and "錄製中" in (r1 or "") and "沒停成" in (r3 or ""), (r2, r1, r3)
+
+
+async def t_teach_out_of_order():
+    """Codex 審 479ae54 P2：同一場錄製，兩次輪詢亂序回來（learning 先到、舊的 recording 晚到）不得倒退；新的一場（不同 sid、按過開始）照收。"""
+    p, b, pg, log = await page_with(base)
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(800)
+    r = await pg.evaluate("""(function(){
+      var now = new Date(Date.now() + 8*3600e3).toISOString().slice(0,19), ep = TEACH_EP;
+      DATA.teach = {sid:'s000000000003', state:'recording', at:now};
+      takeTeach({sid:'s000000000003', state:'learning', at:now}, ep);
+      takeTeach({sid:'s000000000003', state:'recording', at:now}, ep);     // 晚到的舊回應
+      var a = DATA.teach.state;
+      takeTeach(null, ep); var b = DATA.teach && DATA.teach.state;        // 舊快照 null
+      takeTeach({sid:'s000000000003', state:'done', at:now}, ep - 1);     // 出發早於按鈕操作
+      var c = DATA.teach.state;
+      takeTeach({sid:'s000000000004', state:'start', at:now}, ep);        // 新的一場
+      return [a, b, c, DATA.teach.sid];
+    })()""")
+    await b.close(); await p.stop()
+    return r == ["learning", "learning", "learning", "s000000000004"], r
 
 
 async def t_layout_class_survives_quote_cancel():
@@ -975,7 +996,7 @@ MATRIX = [t01, t02, t03, t04, t05, t06, t07, t08, t09, t10, t11, t12, t13, t14, 
           t21, t22, t23, t24, t25, t26, t27, t28, t29, t30, t31, t32, t33, t34, t35, t36, t37,
           t38, t39, t40, t41, t42, t43, t44, t45, t46, t47]
 EXISTING = [t_cid_reused_after_timeout, t_failure_keeps_new_draft_and_quote, t_stale_poll_does_not_drop_new_message,
-            t_teach_menu_keeps_draft, t_teach_record_flow, t_teach_review_84b793d, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
+            t_teach_menu_keeps_draft, t_teach_record_flow, t_teach_review_84b793d, t_teach_out_of_order, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
             t_fail_after_typing_keeps_draft_and_unsent_full, t_fail_untouched_keeps_whole_message,
             t_type_then_clear_counts_as_touched, t_choices_show_despite_unsent, t_line_inapp_banner_390,
             t_draft_edit_store_intact, t_teach_during_pending_not_overwritten, t_line_banner_visible]
