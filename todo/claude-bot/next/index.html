@@ -407,6 +407,8 @@ function renderMsg(m, x){
   while(lines.length && /^✓ /.test(lines[lines.length-1])) acts.unshift(lines.pop().slice(2));
   while(lines.length && !lines[lines.length-1].trim()) lines.pop();
   var q = chat().filter(function(y){ return y.id === x.reply_to; })[0];
+  if(x.kind === 'task'){ var tg = el('div','ask'); tg.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>';
+    tg.appendChild(el('span',null,'例行任務・'+(x.task_name||''))); box.appendChild(tg); }
   if(q){ var a = el('div','ask'); a.innerHTML = ASK_ICON; a.appendChild(el('span',null,'“'+(q.text.length>40?q.text.slice(0,40)+'…':q.text)+'”')); box.appendChild(a); }
   box.appendChild(el('div','txt', lines.join('\n')));
   (x.drafts||[]).forEach(function(d, i){ box.appendChild(replyDraft(d, x.id+'#'+i)); });
@@ -477,8 +479,18 @@ function renderTasks(m){
   add.appendChild(inp); add.appendChild(b); box.appendChild(add); list.appendChild(box);
   list.appendChild(sw('drafts','擬回覆草稿','跟著每輪巡查・只給你看，不會自動送出'));
   list.appendChild(sw('auto_like','生日、喜事按讚','跟著每輪巡查・點開時當場按讚'));
+  ((DATA.tasks && DATA.tasks.items) || []).forEach(function(t){
+    var it = el('div','item'), tx = el('div','tx');
+    tx.appendChild(el('div',null,t.name)); tx.appendChild(el('small',null,'每天 '+(t.times||[]).join('、')+' 左右・'+t.prompt));
+    it.appendChild(tx);
+    var b = el('button','sw'+(t.enabled!==false?' on':'')); b.setAttribute('role','switch'); b.setAttribute('aria-label',t.name);
+    b.setAttribute('aria-checked', t.enabled!==false ? 'true' : 'false');
+    b.onclick = function(){ toggleTask(t.id); };
+    it.appendChild(b); list.appendChild(it);
+  });
   m.appendChild(list);
   // 長期規則：在對話裡說「以後…」記下的，每輪擬稿照做（Grok Bot：說一次就一直照做）
+  m.appendChild(el('div','foot','要新增任務：在對話裡按 ＋ →「教它一項任務」，或直接打「教你一項任務：每天 8 點…」。要刪就跟它說。'));
   m.appendChild(el('div','sect','長期規則（在對話裡說「以後…」就會記下）'));
   var rl = el('div','list'), rules = (s.rules || []);
   if(!rules.length) rl.appendChild(el('div','rule', '還沒有。例：在對話裡打「以後草稿開頭不要用名字稱呼」'));
@@ -517,6 +529,16 @@ function render(){
   document.getElementById('ttl').textContent = VIEW==='tasks' ? '例行任務' : 'Claude Bot';
   if(!DATA){ m.appendChild(el('div','empty','讀取中…')); return; }
   if(VIEW==='tasks') renderTasks(m); else renderChat(m);
+}
+
+async function toggleTask(id){
+  var cur = DATA.tasks || {rev:0, items:[]};
+  var items = cur.items.map(function(t){ var c = Object.assign({}, t); if(c.id===id) c.enabled = !(t.enabled!==false); return c; });
+  try{
+    var r = await api({op:'tasks_set', items:JSON.stringify(items), rev:String(cur.rev||0)});
+    if(!r.ok){ if(r.tasks) DATA.tasks = r.tasks; render(); toast(r.msg==='stale' ? '剛被改過，已更新，請再按一次' : '沒存成：'+r.msg); return; }
+    DATA.tasks = r.tasks; render(); toast('已存');
+  }catch(e){ toast('連線失敗，請再按一次'); }
 }
 
 var SAVING = false;
@@ -558,7 +580,20 @@ function fitQ(){ Q.style.height='auto'; Q.style.height=Math.min(Q.scrollHeight,1
 var ATT = null, LOCALIMG = {}, FILE = document.getElementById('file');
 function setAtt(a){ ATT = a; document.getElementById('ap').className = a ? 'on' : ''; if(a) document.getElementById('api').src = a.url;
   document.getElementById('barbox').className = 'bar' + (REPLY ? ' quoting' : '') + (a ? ' att' : ''); fitQ(); }
-document.getElementById('plus').onclick = function(){ FILE.value = ''; FILE.click(); };
+var ICON_IMG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/></svg>';
+var ICON_TEACH = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="#dc2626" stroke-width="2"/><circle cx="12" cy="12" r="4" fill="#dc2626"/></svg>';
+// ＋ 選單（Grok Bot 實機：附加檔案／教它一項任務）
+document.getElementById('plus').onclick = function(){
+  var r = document.getElementById('plus').getBoundingClientRect();
+  MCARD.textContent = ''; MCARD.className = 'card';
+  var a = el('button','it'); a.innerHTML = ICON_IMG; a.appendChild(el('span',null,'附加圖片'));
+  a.onclick = function(){ MENU.className=''; FILE.value=''; FILE.click(); };
+  var t = el('button','it'); t.innerHTML = ICON_TEACH; t.appendChild(el('span',null,'教它一項任務'));
+  t.onclick = function(){ MENU.className=''; Q.value = '教你一項任務：每天 '; fitQ(); Q.focus(); Q.setSelectionRange(Q.value.length, Q.value.length);
+    toast('寫下幾點做、做什麼、整理成什麼樣子'); };
+  MCARD.appendChild(a); MCARD.appendChild(t); MENU.className = 'on';
+  MCARD.style.left = Math.max(12, r.left) + 'px'; MCARD.style.top = Math.max(12, r.top - MCARD.offsetHeight - 10) + 'px';
+};
 document.getElementById('apx').onclick = function(){ setAtt(null); };
 FILE.onchange = function(){
   var f = FILE.files && FILE.files[0]; if(!f) return;
