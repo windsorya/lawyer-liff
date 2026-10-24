@@ -783,7 +783,7 @@ function render(){
   document.getElementById('back').hidden = VIEW!=='tasks';
   document.getElementById('tasks').hidden = VIEW==='tasks';
   document.getElementById('ttl').textContent = VIEW==='tasks' ? '例行任務' : 'Claude Bot';
-  if(!DATA){ m.appendChild(el('div','empty', BOOT.msg || '讀取中…')); if(BOOT.msg) document.getElementById('hd').textContent = BOOT.msg; return; }   // 第一次就讀不到：照實說原因與何時重試（設計者 ec1352 T04）
+  if(!DATA){ m.appendChild(el('div','empty', BOOT.msg || '讀取中…')); if(BOOT.msg){ var hd0 = document.getElementById('hd'); hd0.textContent = BOOT.msg; hd0.className = 'warn'; } return; }   // 頁尾可點：重新登入或立即重試   // 第一次就讀不到：照實說原因與何時重試（設計者 ec1352 T04）
   if(VIEW==='tasks') renderTasks(m); else renderChat(m);
   paintNote(); paintTeach();
 }
@@ -891,7 +891,8 @@ async function load(){
   var r;
   try{ r = await api({op:'state'}); }catch(e){ workObserve(null); throw e; }
   workObserve(r);   // 初次載入也走同一個入口（設計者 ec1352 T04）
-  if(!r || !r.ok){ BOOT.msg = r && r.msg === 'forbidden' ? (SYNCST.auth === 'denied' ? '只有王律師本人可以看' : '雲端不認這次登入，正在確認是不是登入過期')
+  if(!r || !r.ok){ BOOT.msg = r && r.msg === 'forbidden' ? (SYNCST.auth === 'denied' ? '只有王律師本人可以看'
+      : SYNCST.auth === 'hold' ? '登入過期——點這一行重新登入' + (SYNCST.holdWhy ? '（'+SYNCST.holdWhy+'）' : '') : '雲端不認這次登入，正在確認是不是登入過期')
     : '讀取失敗' + (r && r.msg ? '（'+r.msg+'）' : ''); return false; }   // 不再停在這裡：boot() 照實顯示並自動重試
   DATA = r; SYNCST.stateMono = mono(); paintWork();
   return true;
@@ -1217,7 +1218,9 @@ function relogin(byUser){
   var last = 0; try{ last = +(localStorage.getItem('cb_relogin_at') || 0); }catch(e){}
   var why = (ACTIVE || pendingList().length) ? '有訊息還沒送完' : (COMPOSER.asset || COMPOSER.imageJobId) ? '輸入框有圖' : COMPOSING ? '正在選字'
     : (Date.now() - last < RELOGIN_GAP_MS) ? '剛重新登入過還是被拒' : '';
-  if(!byUser && why){ SYNCST.auth = 'hold'; SYNCST.holdWhy = why; paintSync(); return; }
+  if(!byUser && why){ SYNCST.auth = 'hold'; SYNCST.holdWhy = why; paintSync();
+    if(!DATA){ BOOT.msg = '登入過期——點這一行重新登入（'+why+'）'; render(); }   // 還沒載入過：主畫面與頁尾直接講要點哪裡（10-25 實站實跑看到停在「正在確認」）
+    return; }
   SYNCST.auth = 'expired'; paintSync();
   var keep = COMPOSER.rawText ? {t:COMPOSER.rawText, q:COMPOSER.quote} : null;
   if(!keep){ var pm = pendingList()[0]; if(pm) keep = {t:pm.snapshot.rawText, q:pm.snapshot.quote}; }   // 還沒送完的那則：登入回來放回輸入框

@@ -1560,10 +1560,23 @@ async def t78():   # 「停了沒」單一判準：條變灰 ⇔ 文字說可能
     normal_wait_runs = all(c == "run" for i, c, _ in rows if i <= 470)
     return same and normal_wait_runs and rows[-1][1] == "idle", rows
 
+
+async def t79():   # 還沒載入過就登入過期、且 10 分鐘內剛重登過（防無限跳轉）⇒ 主畫面與頁尾直接寫「點這一行重新登入」、頁尾可點；點了才登入
+    init = "try{localStorage.setItem('cb_relogin_at', String(Date.now()));}catch(e){}"
+    c, h = _cloud(); c["mode"] = "forbidden"
+    p, b, pg, log = await page_with(h, init=init, liff=liff_js(profile_ok=False))
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(1500)
+    v = await pg.evaluate("({main: document.getElementById('main').innerText, hd: %s, cls: document.getElementById('hd').className,"
+                          " login: window.__login.length})" % HD)
+    await pg.click("#hd"); await pg.wait_for_timeout(300)
+    n = await pg.evaluate("window.__login.length")
+    await done(p, b)
+    return ("點這一行重新登入" in v["main"] and "點這一行重新登入" in v["hd"] and v["cls"] == "warn" and v["login"] == 0 and n == 1), (v, n)
+
 MATRIX = [t01, t02, t03, t04, t05, t06, t07, t08, t09, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20,
           t21, t22, t23, t24, t25, t26, t27, t28, t29, t30, t31, t32, t33, t34, t35, t36, t37,
           t38, t39, t40, t41, t42, t43, t44, t45, t46, t47, t48, t49, t50, t51, t52, t53, t54, t55, t56, t57, t58, t59, t60, t61, t62, t63, t64,
-          t65, t66, t67, t68, t69, t70, t71, t72, t73, t74, t75, t76, t77, t78]
+          t65, t66, t67, t68, t69, t70, t71, t72, t73, t74, t75, t76, t77, t78, t79]
 EXISTING = [t_cid_reused_after_timeout, t_failure_keeps_new_draft_and_quote, t_stale_poll_does_not_drop_new_message,
             t_teach_menu_keeps_draft, t_teach_record_flow, t_teach_review_84b793d, t_teach_out_of_order, t_teach_stop_response_late, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
             t_fail_after_typing_keeps_draft_and_unsent_full, t_fail_untouched_keeps_whole_message,
