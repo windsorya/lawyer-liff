@@ -3,69 +3,224 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<!-- 加到主畫面（#4176）：故意不設 apple-mobile-web-app-capable、manifest 用 display:browser——
+     iPhone 主畫面的全螢幕模式有自己獨立的儲存，LINE 登入在 Safari 完成後 App 讀不到（matcha-pocket PR #3 同型），
+     所以主畫面圖示點開走 Safari，登入狀態與 Safari 共用。 -->
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.json">
+<meta name="apple-mobile-web-app-title" content="Claude Bot">
 <title>Claude Bot</title>
 <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 <style>
-  /* 版面仿 Grok Bot：深色、對話式日報、例行任務設定（律師 2026-10-23「設定的介面可以參考 Grok bot 的介面」） */
+  /* C 方案（2026-10-23 律師定案）：仿 Grok Bot 的對話式版面。2026-10-24 律師拿 Grok Bot 手機截圖對照指出「長相完全不同」，
+     改成照他截圖的外觀：跟手機一樣淺色（深色模式自動變深）、浮起來的圓鈕＋置中名稱膠囊、助理每段話放在淺灰大圓角面板、
+     大字、粗體小標＋項目清單、底部膠囊列、捲到最新的圓鈕。2026-10-24 律師：「可以先上線讓我用嗎？」⇒ 換上正式版 todo/claude-bot/（next/ 保留作預覽）。 */
   :root{
-    --bg:#0B0B0C; --card:#17171A; --ink:#F4F4F5; --sub:#A1A1AA;
-    --line:#27272A; --accent:#D97757; --ok:#22C55E; --warn:#F59E0B;
+    --bg:#ffffff; --panel:#f2f2f4; --card:#ffffff; --field:#f2f2f4; --ink:#111113; --sub:#6e6e76; --faint:#a1a1a8;
+    --line:#e4e4e8; --fab:#ffffff; --shadow:0 2px 12px rgba(0,0,0,.10),0 0 0 1px rgba(0,0,0,.04);
+    --solid:#111113; --on-solid:#ffffff; --ok:#15803d; --warn:#b45309; --brand:#d97757;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#000; --panel:#1c1c1e; --card:#2a2a2d; --field:#2a2a2d; --ink:#f5f5f5; --sub:#a1a1a8; --faint:#6e6e76;
+      --line:#2f2f33; --fab:#1c1c1e; --shadow:0 2px 12px rgba(0,0,0,.5),0 0 0 1px rgba(255,255,255,.06);
+      --solid:#f5f5f5; --on-solid:#000; --ok:#4ade80; --warn:#fbbf24; }
   }
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-  body{margin:0;background:var(--bg);color:var(--ink);
-       font:16px/1.55 -apple-system,"Noto Sans TC",sans-serif;
-       padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
-  header{display:flex;align-items:center;gap:10px;padding:16px;border-bottom:1px solid var(--line)}
-  .logo{width:36px;height:36px;border-radius:50%;background:var(--accent);display:grid;place-items:center;font-weight:700}
-  h1{margin:0;font-size:18px}
-  .sub{font-size:12px;color:var(--sub)}
-  nav{display:flex;gap:4px;padding:8px 12px;border-bottom:1px solid var(--line)}
-  nav button{flex:1;background:none;border:0;color:var(--sub);font:inherit;font-size:14px;padding:8px;border-radius:8px}
-  nav button.on{background:var(--card);color:var(--ink)}
-  main{padding:12px 16px 40px}
-  .msg{background:var(--card);border-radius:14px;padding:12px 14px;margin:10px 0}
-  .msg .t{font-size:12px;color:var(--sub);margin-bottom:4px}
-  .row{display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-top:1px solid var(--line);font-size:14px}
-  .row:first-of-type{border-top:0}
-  .tag{font-size:12px;padding:1px 8px;border-radius:99px;background:#27272A;color:var(--sub);white-space:nowrap}
-  .tag.ok{color:var(--ok)} .tag.warn{color:var(--warn)}
-  .set{display:flex;justify-content:space-between;align-items:center;padding:14px 0;border-top:1px solid var(--line)}
-  .set:first-child{border-top:0}
-  .set small{display:block;color:var(--sub);font-size:12px}
-  .sw{width:50px;height:30px;border-radius:99px;background:#3F3F46;position:relative;border:0;flex:none}
-  .sw::after{content:"";position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;background:#fff;transition:left .15s}
-  .sw.on{background:var(--ok)} .sw.on::after{left:23px}
-  input[type=text]{background:#09090B;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:8px;font:inherit;width:150px}
-  .btn{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:8px 12px;font:inherit;font-size:14px}
-  .draft{border-top:1px solid var(--line);padding:8px 0}
-  .dtext{background:#09090B;border-radius:10px;padding:10px;font-size:15px;-webkit-user-select:text;user-select:text}
-  .bar{display:flex;gap:8px;margin-top:8px}
-  .btn.ghost{background:#27272A;color:var(--ink)}
-  .empty{color:var(--sub);text-align:center;padding:30px 0}
-  #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#fff;color:#000;padding:8px 14px;border-radius:99px;font-size:14px;opacity:0;transition:opacity .2s}
+  html,body{background:var(--bg)}
+  body{margin:0;color:var(--ink);font:19px/1.6 -apple-system,"PingFang TC","Noto Sans TC",sans-serif;
+       -webkit-font-smoothing:antialiased}
+  button{font-family:inherit;color:inherit}
+
+  /* 頂部：左右兩顆浮起來的圓鈕、中間名稱膠囊；內容從底下捲過去 */
+  .top{position:fixed;top:0;left:0;right:0;z-index:5;display:flex;align-items:center;justify-content:space-between;
+       padding:calc(env(safe-area-inset-top) + 8px) 16px 14px;
+       background:linear-gradient(var(--bg) 55%, transparent);pointer-events:none}
+  .top > *{pointer-events:auto}
+  .fab{width:52px;height:52px;border-radius:50%;border:0;background:var(--fab);box-shadow:var(--shadow);
+       display:grid;place-items:center;touch-action:manipulation;flex:none}
+  .fab:active{transform:scale(.96)}
+  .fab svg{width:24px;height:24px}
+  .fab[hidden]{visibility:hidden;display:grid}
+  .name{display:flex;align-items:center;gap:10px;height:52px;padding:0 20px 0 12px;border-radius:99px;background:var(--fab);box-shadow:var(--shadow)}
+  .name{cursor:pointer;touch-action:manipulation}
+  .prof{text-align:center;margin:8px 0 24px}
+  .prof svg{width:96px;height:96px}
+  .prof b{display:block;font-size:24px;font-weight:600;margin-top:10px}
+  .prof small{color:var(--sub);font-size:14px}
+  .item.tap{cursor:pointer}
+  .slots{display:none;padding:0 16px 12px}
+  .slots.on{display:block}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+  .chips span{display:inline-flex;align-items:center;gap:6px;background:var(--card);border-radius:99px;padding:6px 6px 6px 14px;font-variant-numeric:tabular-nums;font-size:17px}
+  .chips .x{width:28px;height:28px;font-size:15px}
+  .slots .add{padding:0;border:0}
+  .name b{font-size:19px;font-weight:600;letter-spacing:.01em}
+  .logo{width:30px;height:30px;flex:none}
+  main{padding:calc(env(safe-area-inset-top) + 84px) 16px calc(env(safe-area-inset-bottom) + 112px);max-width:680px;margin:0 auto}
+
+  /* 助理的一段話＝一塊淺灰大圓角面板（Grok Bot 截圖的樣子） */
+  .turn{margin:0 0 18px}
+  .when{font-size:13px;color:var(--faint);margin:0 6px 6px}
+  .msg{background:var(--panel);border-radius:24px;padding:14px 18px 16px;width:fit-content;max-width:100%}
+  .sep{text-align:center;font-size:13px;color:var(--faint);margin:6px 0 12px}
+  .sys{text-align:center;font-size:13px;color:var(--sub);margin:-8px 0 16px}
+  .say b{font-weight:600}
+  .h{font-weight:700;margin:16px 0 6px}
+  ul.bul{margin:0;padding:0 0 0 1.2em}
+  ul.bul li{margin:4px 0}
+  ul.bul li::marker{color:var(--faint)}
+
+  /* 草稿：面板裡的白色小卡；對方原話是引言、草稿可直接改字 */
+  .card{background:var(--card);border-radius:18px;padding:14px;margin:10px 0 0}
+  .card .to{font-size:17px;font-weight:600}
+  .quote{margin:6px 0 10px;padding:0 0 0 10px;border-left:3px solid var(--line);color:var(--sub);font-size:16px;line-height:1.55}
+  textarea{width:100%;min-height:64px;resize:none;border:1px solid transparent;border-radius:14px;background:var(--field);
+           color:var(--ink);font-family:inherit;font-size:17px;line-height:1.6;padding:10px 12px;outline:none}
+  textarea:focus{border-color:var(--faint)}
+  .edited{font-size:13px;color:var(--warn);margin-top:4px}
+  .acts{display:flex;gap:8px;margin-top:10px}
+  .pill{flex:1;min-height:46px;border-radius:99px;border:0;font-size:16px;font-weight:600;touch-action:manipulation}
+  .pill.main{background:var(--solid);color:var(--on-solid)}
+  .pill.alt{background:var(--field);color:var(--ink);flex:0 0 auto;padding:0 18px}
+  .pill:active{opacity:.75}
+  .done{display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:15px;color:var(--ok)}
+  .done.no{color:var(--sub)}
+  .link{background:none;border:0;font-size:15px;text-decoration:underline;text-underline-offset:3px;padding:6px 0}
+
+  details{margin-top:6px}
+  summary{cursor:pointer;list-style:none;font-weight:700;margin:14px 0 4px}
+  summary::-webkit-details-marker{display:none}
+  summary::after{content:" ›";color:var(--faint);font-weight:400}
+  details[open] summary::after{content:" ⌄"}
+  .fold{background:var(--panel);border-radius:24px;padding:4px 18px 10px;margin:0 0 18px;font-size:16px;color:var(--sub)}
+  .fold > summary{font-weight:500;margin:10px 0}
+  .fold .msg{background:var(--card)}
+
+  /* 例行任務：排程清單 */
+  .sect{font-size:14px;color:var(--sub);margin:4px 6px 8px}
+  .list{background:var(--panel);border-radius:22px;overflow:hidden;margin-bottom:22px}
+  .item{display:flex;align-items:center;gap:12px;padding:14px 16px;border-top:1px solid var(--line)}
+  .item:first-child{border-top:0}
+  .item .tx{flex:1}
+  .item .tx small{display:block;color:var(--sub);font-size:14px;line-height:1.45}
+  .time{font-variant-numeric:tabular-nums;font-size:24px;font-weight:500;letter-spacing:.01em}
+  .x{border:0;background:var(--card);color:var(--sub);width:32px;height:32px;border-radius:50%;font-size:17px}
+  .add{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--line)}
+  input[type=time]{flex:1;background:var(--card);border:0;border-radius:12px;color:var(--ink);font:inherit;font-size:17px;padding:8px 12px}
+  .sw{width:51px;height:31px;border-radius:99px;background:var(--line);position:relative;border:0;flex:none}
+  .sw::after{content:"";position:absolute;top:2px;left:2px;width:27px;height:27px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.2);transition:left .18s ease-out}
+  .quiet{color:var(--sub);font-size:15px}
+  .sw.on{background:#3478f6}   /* Grok Bot 實機：例行任務開關是藍色 */ .sw.on::after{left:22px}
+  .foot{font-size:13px;color:var(--faint);margin:10px 6px}
+  .empty{color:var(--sub);text-align:center;padding:40px 0}
+
+  /* 對話：律師的話＝右側深色泡泡；回答引用他問的那句（Grok Bot 實機畫面） */
+  .me{display:flex;justify-content:flex-end;margin:0 0 14px}
+  .me div{max-width:82%;background:var(--solid);color:var(--on-solid);border-radius:24px;padding:10px 18px;white-space:pre-wrap;word-break:break-word;font-size:18px}
+  .me small{display:block;text-align:right;font-size:12px;color:var(--faint);margin:4px 8px 0}
+  .ask{display:flex;gap:8px;align-items:flex-start;color:var(--sub);font-size:16px;margin-bottom:8px}
+  .ask svg{width:18px;height:18px;flex:none;margin-top:3px}
+  .txt{white-space:pre-wrap;word-break:break-word}
+  .msg.fail{border:1px solid var(--warn)}
+  .think{color:var(--sub)}
+  .think i{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--faint);margin-right:5px;animation:bl 1.2s infinite}
+  .think i:nth-child(2){animation-delay:.2s} .think i:nth-child(3){animation-delay:.4s}
+  @keyframes bl{0%,80%,100%{opacity:.25}40%{opacity:1}}
+  .opts{display:flex;flex-direction:column;align-items:flex-start;gap:8px;margin:-6px 0 16px}
+  .opts button{border:1px solid var(--line);background:var(--bg);border-radius:99px;padding:9px 16px;font-size:16px;text-align:left;touch-action:manipulation}
+  .opts button:active{background:var(--panel)}
+  .rule{display:flex;align-items:center;gap:12px;padding:12px 16px;border-top:1px solid var(--line);font-size:16px}
+  .rule:first-child{border-top:0}
+  .rule span{flex:1}
+  /* 兩指點擊（右鍵）／長按泡泡的選單：Grok Bot 實機＝一排表情＋回覆＋複製 */
+  .msg,.me div{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;position:relative}
+  #menu{position:fixed;inset:0;z-index:9;display:none}
+  #menu.on{display:block}
+  #menu .card{position:absolute;width:250px;background:var(--fab);box-shadow:0 8px 32px rgba(0,0,0,.18),0 0 0 1px rgba(0,0,0,.05);border-radius:20px;padding:10px 8px 6px;margin:0}
+  #menu .card.pill{width:auto;border-radius:99px;padding:6px 10px}
+  #menu .card.pill .emo{border:0;margin:0;padding:0;gap:4px}
+  #menu .emo{display:flex;justify-content:space-around;padding:2px 4px 8px;border-bottom:1px solid var(--line);margin-bottom:4px}
+  #menu .emo button{border:0;background:none;font-size:26px;width:40px;height:40px;border-radius:50%}
+  #menu .emo button.sel{background:var(--panel)}
+  #menu .it{display:flex;align-items:center;gap:12px;width:100%;border:0;background:none;font-size:17px;padding:10px 12px;border-radius:12px;text-align:left}
+  #menu .it:active{background:var(--panel)}
+  #menu .it svg{width:20px;height:20px}
+  /* 電腦上滑過泡泡：旁邊浮出 表情／回覆／更多（Grok Bot 實機）；手機沒有滑過，用長按 */
+  .hov{display:none;position:absolute;top:50%;transform:translateY(-50%);gap:2px;padding:0 6px}
+  .hov button{width:34px;height:34px;border:0;border-radius:10px;background:none;color:var(--sub);display:grid;place-items:center}
+  .hov button:hover{background:var(--panel)}
+  .hov svg{width:20px;height:20px}
+  @media (hover:hover){ .msg:hover > .hov, .me div:hover > .hov{display:flex} }
+  .msg > .hov{left:100%}
+  .me div > .hov{right:100%}
+  .rx{position:absolute;right:-6px;bottom:-12px;background:var(--fab);box-shadow:var(--shadow);border-radius:99px;padding:1px 7px;font-size:15px}
+  .meq{text-align:right;font-size:13px;color:var(--sub);margin:0 8px 4px}
+  #rq{display:none;align-items:center;gap:8px;width:100%;background:var(--fab);border:1px solid var(--line);border-radius:14px;padding:6px 6px 6px 12px;font-size:14px;color:var(--sub)}
+  .bar.quoting{flex-wrap:wrap;border-radius:24px;padding-top:10px}
+  .bar.quoting #rq{margin-right:-1px}
+  #rq.on{display:flex}
+  #rq span{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .num{display:inline-grid;place-items:center;min-width:24px;height:24px;border-radius:12px;background:var(--solid);color:var(--on-solid);font-size:13px;font-weight:600;margin-right:8px;padding:0 6px}
+
+  /* 底部：輸入框（傳訊息給 Claude Bot）、捲到最新圓鈕 */
+  .dock{position:fixed;left:0;right:0;bottom:0;z-index:5;padding:14px 16px calc(env(safe-area-inset-bottom) + 12px);
+        background:linear-gradient(transparent, var(--bg) 45%)}
+  .bar{width:100%;max-width:648px;margin:0 auto;display:flex;align-items:flex-end;gap:10px;min-height:58px;padding:7px 7px 7px 20px;
+       border-radius:29px;background:var(--fab);box-shadow:var(--shadow)}
+  .bar textarea{flex:1;min-height:44px;max-height:160px;background:none;border:0;border-radius:0;padding:10px 0;font-size:17px;line-height:1.45}
+  .bar textarea::placeholder{color:var(--faint)}
+  .plus{width:44px;height:44px;border-radius:50%;border:0;background:var(--panel);color:var(--sub);display:grid;place-items:center;flex:none;margin-left:-13px;touch-action:manipulation}
+  .plus svg{width:22px;height:22px}
+  #ap{display:none;position:relative;width:100%}
+  #ap.on{display:flex;align-items:flex-start}
+  #ap img{height:72px;border-radius:12px;border:1px solid var(--line)}
+  #ap .x{margin:-8px 0 0 -14px;box-shadow:var(--shadow);background:var(--fab)}
+  .bar.quoting,.bar.att{flex-wrap:wrap;border-radius:24px;padding-top:10px}
+  .meimg{display:flex;justify-content:flex-end;margin:0 0 6px}
+  .meimg img{max-width:60%;max-height:220px;border-radius:18px}
+  .meimg span{background:var(--panel);border-radius:14px;padding:6px 12px;font-size:14px;color:var(--sub)}
+  .go{width:44px;height:44px;border-radius:50%;border:0;background:var(--solid);color:var(--on-solid);display:grid;place-items:center;flex:none;touch-action:manipulation}
+  .go:disabled{opacity:.25}
+  .go svg{width:20px;height:20px}
+  #hd{text-align:center;font-size:12px;color:var(--faint);margin:0 0 6px;min-height:16px}
+  .dock.hide{display:none}
+  .down{position:fixed;left:calc(50% - 23px);bottom:calc(env(safe-area-inset-bottom) + 86px);z-index:4;width:46px;height:46px;transition:opacity .2s}
+  .down.off{opacity:0;pointer-events:none}
+  #toast{position:fixed;left:50%;bottom:calc(96px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--solid);color:var(--on-solid);
+         padding:9px 16px;border-radius:99px;font-size:15px;opacity:0;transition:opacity .2s;pointer-events:none;white-space:nowrap;z-index:6}
   #toast.on{opacity:1}
 </style>
 </head>
 <body>
-<header>
-  <div class="logo">C</div>
-  <div><h1>Claude Bot</h1><div class="sub" id="hd">讀取中…</div></div>
-</header>
-<nav>
-  <button id="tab-today" class="on">今天</button>
-  <button id="tab-tasks">例行任務</button>
-</nav>
+<div class="top">
+  <button class="fab" id="back" aria-label="回對話" hidden>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+  <div class="name" id="name" role="button" tabindex="0" aria-label="Claude Bot 個人頁與例行任務">
+    <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="16" fill="#d97757"/>
+      <g stroke="#fff" stroke-width="2.6" stroke-linecap="round"><path d="M16 7v18M7 16h18M9.6 9.6l12.8 12.8M22.4 9.6L9.6 22.4"/></g></svg>
+    <b id="ttl">Claude Bot</b></div>
+  <button class="fab" id="tasks" aria-label="例行任務">
+    <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+</div>
 <main id="main"></main>
+<button class="fab down off" id="down" aria-label="捲到最新">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+<div id="menu"><div class="card" id="mcard"></div></div>
+<div class="dock" id="dock"><div id="hd">讀取中…</div>
+  <div class="bar" id="barbox"><div id="rq"><span id="rqt"></span><button class="x" id="rqx" aria-label="取消回覆">×</button></div><div id="ap"><img id="api" alt="要附的圖"><button class="x" id="apx" aria-label="取消附圖">×</button></div><button class="plus" id="plus" aria-label="附加圖片"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button><input type="file" id="file" accept="image/*" hidden><textarea id="q" rows="1" placeholder="傳訊息給 Claude Bot" aria-label="傳訊息給 Claude Bot"></textarea>
+  <button class="go" id="send" aria-label="送出" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button></div></div>
 <div id="toast"></div>
 
 <script>
 // 資料端：晨報同一支 GAS（gas/morning-briefing/claude-bot.js）。本頁在 public repo，不放任何憑證；
 // 身分＝LIFF token → GAS 打 LINE /v2/profile 比對律師 userId。所有字串一律用 textContent 放進畫面（不拼 HTML）。
 var GAS = 'https://script.google.com/macros/s/AKfycbwKmbZb9cjf5O3t4k1uZN9973YwGAeTflMRYq9_IiaA59kOZO1pdjkXelNLYcJYYabu_g/exec';
-var LIFF_ID = '2009829573-HqpYQNtn';   // 晨報待辦 LIFF app；本頁是它 endpoint 的子路徑 todo/claude-bot/
-var TOKEN = null, DATA = null, TAB = 'today', SLOTS_DRAFT = null;
+var LIFF_ID = '2009829573-HqpYQNtn';
+var TOKEN = null, DATA = null, VIEW = 'chat', EDITS = {}, NEWSLOT = '', NUM = {};   // NUM：卡片編號 → 畫面上的第幾則（傳訊息時一起送，「1 回了」才對得上）
 
-function toast(t){var e=document.getElementById('toast');e.textContent=t;e.className='on';setTimeout(function(){e.className='';},2200);}
+function toast(t){var e=document.getElementById('toast');e.textContent=t;e.className='on';clearTimeout(toast.t);toast.t=setTimeout(function(){e.className='';},2400);}
 function el(tag, cls, text){var e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e;}
 
 function api(params){
@@ -82,96 +237,7 @@ function api(params){
   });
 }
 
-var RESULT = {done:['完成','ok'], no_unread:['沒有未讀','ok'], partial:['部分完成，稍後補跑','warn'],
-              wait:['等你離開電腦','warn'], aborted:['中止','warn'], interrupted:['你回座，暫停','warn'],
-              blocked:['擋下（利衝名單讀不到）','warn'], dry_run:['演練','']};
-
-function renderToday(m){
-  var st = DATA.state;
-  if(!st || !st.rounds || !Object.keys(st.rounds).length){ m.appendChild(el('div','empty','今天還沒有跑過')); return; }
-  Object.keys(st.rounds).sort(function(x,y){ var a=(st.rounds[x].at||'')+x, b=(st.rounds[y].at||'')+y; return a<b?-1:a>b?1:0; })   /* 照執行時間排，過午夜的輪次排在後面 */.forEach(function(k){
-    var r = st.rounds[k], card = el('div','msg');
-    var lab = RESULT[r.result] || [r.result,''];
-    card.appendChild(el('div','t', k+' 這一輪｜'+(r.at||'').slice(11,16)+' 執行'));
-    var head = el('div','row'); head.appendChild(el('span',null,'LINE 未讀 '+(r.dock_badge==null?'—':r.dock_badge)+'・綠點 '+(r.badges==null?'—':r.badges)+' 間'));
-    head.appendChild(el('span','tag '+lab[1],lab[0])); card.appendChild(head);
-    (r.opened||[]).forEach(function(o){
-      var row = el('div','row'); row.appendChild(el('span',null,'點開：'+o.name));
-      row.appendChild(el('span','tag', o.like_candidate ? '按讚候選・'+(o.like||'開關關閉') : '讀 '+o.lines+' 行'));
-      card.appendChild(row);
-    });
-    (r.drafts||[]).forEach(function(d){
-      var box = el('div','draft'); box.appendChild(el('div','t','回覆草稿・'+d.chat+'（不會自動送出，長按可複製）'));
-      box.appendChild(el('div','dtext',d.draft));
-      if(d.decision){
-        box.appendChild(el('div','t', d.decision==='ok' ? '你按了送出・'+(d.send||'') : (d.decision==='no'?'你按了不要':'卡片對不上，未採用')));
-        if(d.decision==='ok'){ var cb = el('div','bar'), cp = el('button','btn ghost','複製全文');
-          cp.onclick=function(){ copyText(d.draft, function(c){ toast(c ? '已複製，到 LINE 貼上即可' : '複製失敗，請長按草稿複製'); }); };
-          cb.appendChild(cp); box.appendChild(cb); }
-      }
-      else if(d.card_id){
-        var bar = el('div','bar');
-        var ok = el('button','btn','送出'), no = el('button','btn ghost','不要');
-        // 送出＝記下決定＋同時複製全文（律師 10-24：「為何點送出時，不能同時複製全文？很不方便」）。
-        // 複製必須在點擊當下同步做：iOS／LINE 內建瀏覽器只准使用者手勢內寫剪貼簿，await 之後就不准了。
-        ok.onclick=function(){ copyText(d.draft, function(c){ decide(d, 'ok', c); }); }; no.onclick=function(){ decide(d, 'no'); };
-        bar.appendChild(ok); bar.appendChild(no); box.appendChild(bar);
-        box.appendChild(el('div','t','代送尚未開放：按「送出」會記下決定並複製全文，到 LINE 貼上即可'));
-      }
-      card.appendChild(box);
-    });
-    var sk = r.skipped_counts || {};
-    Object.keys(sk).forEach(function(why){
-      var row = el('div','row'); row.appendChild(el('span',null,'有綠點不點：'+why)); row.appendChild(el('span','tag',sk[why]+' 間')); card.appendChild(row);
-    });
-    m.appendChild(card);
-  });
-  m.appendChild(el('div','t','更新於 '+(st.pushedAt||'—')));
-}
-
-function sw(name, label, hint){
-  var s = DATA.settings||{}, box = el('div','set'), txt = el('div');
-  txt.appendChild(el('div',null,label)); txt.appendChild(el('small',null,hint)); box.appendChild(txt);
-  var b = el('button','sw'+(s[name]===true?' on':'')); b.setAttribute('aria-label',label);
-  b.onclick = function(){ save(name, s[name]===true ? 'false' : 'true'); };
-  box.appendChild(b); return box;
-}
-
-function renderTasks(m){
-  var s = DATA.settings||{}, card = el('div','msg');
-  card.appendChild(el('div','t','例行任務：每天依下列時段看 LINE 綠點'));
-  var box = el('div','set'), txt = el('div');
-  txt.appendChild(el('div',null,'執行時段')); txt.appendChild(el('small',null,'用逗號分隔，例：10:00,16:00,21:00')); box.appendChild(txt);
-  var wrap = el('div'); var inp = el('input'); inp.type='text';
-  inp.value = SLOTS_DRAFT!=null ? SLOTS_DRAFT : (s.slots||['10:00','16:00','21:00']).join(',');
-  inp.oninput = function(){ SLOTS_DRAFT = inp.value; };   // 還沒按「存」的字，重繪時不清掉（Codex 審 01212ada）
-  var ok = el('button','btn','存'); ok.onclick=function(){ var sent = inp.value; save('slots', sent).then(function(done){ if(done && SLOTS_DRAFT === sent) SLOTS_DRAFT = null; }); };   // 存檔期間又改的字不清掉（Codex 審 f9517dda）
-  wrap.appendChild(inp); wrap.appendChild(ok); box.appendChild(wrap); card.appendChild(box);
-  card.appendChild(sw('auto_like','自動按讚','點開聊天室時，對生日、喜事、升任、得獎這類貼文當場按讚'));
-  card.appendChild(sw('drafts','擬回覆草稿','只產生草稿給你看，不會自動送出'));
-  m.appendChild(card);
-  m.appendChild(el('div','t','規則固定：案件群、利衝名單、家人、社群一律不點開。設定第 '+(s.rev||0)+' 版'+(s.updatedAt?'，'+s.updatedAt:'')));
-}
-
-function render(){
-  var m = document.getElementById('main'); m.textContent='';
-  if(!DATA){ m.appendChild(el('div','empty','讀取中…')); return; }   // 載入前點分頁不空白（Codex 審 01212ada）
-  document.getElementById('tab-today').className = TAB==='today'?'on':'';
-  document.getElementById('tab-tasks').className = TAB==='tasks'?'on':'';
-  if(TAB==='today') renderToday(m); else renderTasks(m);
-}
-
-async function save(name, value){
-  try{
-    var r = await api({op:'set', name:name, value:value});
-    if(!r.ok){ toast('沒存成：'+(r.msg==='bad setting'?'格式不對':r.msg)); return false; }
-    // 回應可能亂序：版本較舊的回應不覆蓋畫面（Codex 審 01212ada）
-    if(!DATA.settings || (r.settings.rev||0) >= (DATA.settings.rev||0)) DATA.settings = r.settings;
-    render(); toast('已存，下一次巡查生效'); return true;
-  }catch(e){ toast('連線失敗，請再按一次'); return false; }
-}
-
-/** 同步複製（不得在 await 之後呼叫）：先試 textarea＋execCommand（iOS LINE 內建瀏覽器可用），再補 navigator.clipboard。 */
+/** 同步複製（必須在點擊當下呼叫，不得在 await 之後）：textarea＋execCommand（iOS LINE 內建瀏覽器可用），再補 navigator.clipboard。 */
 function copyText(text, done){
   // 回報的是「真的複製成功了沒」：execCommand 失敗才用 clipboard API，而它是 Promise，要等結果（Codex 審 f9517dda）
   var ok = false;
@@ -188,37 +254,458 @@ function copyText(text, done){
   done(false);
 }
 
+var RESULT = {done:'看完了', no_unread:'沒有未讀', partial:'還有幾間沒看完，稍後補', wait:'等你離開電腦再看',
+              aborted:'中途停下', interrupted:'你回座了，先停', blocked:'利衝名單讀不到，這輪不動'};
+
+function hm(iso){ return (iso||'').slice(11,16); }
+
+/** 一輪＝Claude Bot 說一段話：一句總結＋需要回的草稿卡＋（收起來的）點開清單。 */
+function renderRound(m, key, r){
+  var drafts = r.drafts || [];
+  var opened = r.opened || [];
+  var turn = el('div','turn');
+  if(m.tagName === 'DETAILS') turn.appendChild(el('div','when', hm(r.at)||key.replace(/\s.*$/,'')));
+  var box = el('div','msg'); turn.appendChild(box);
+  bindMenu(box, {text:null, box:box});
+  var pending = drafts.filter(function(d){return !d.decision;}).length;
+  var say = el('div','say');
+  var n = opened.length || r.opened_count || 0;
+  var lead = n ? '這一輪看了 '+n+' 間' : (RESULT[r.result] || '這一輪沒有點開聊天室');
+  var unfinished = r.result && r.result !== 'done' && r.result !== 'no_unread';
+  if(unfinished && n) lead += '（' + (RESULT[r.result] || r.result) + '）';   // 沒做完一定要講，有沒有草稿都一樣（Codex 審 d39de488）
+  if(drafts.length){
+    say.appendChild(document.createTextNode(lead+'，'));
+    say.appendChild(el('b',null, pending ? '有 '+pending+' 則要你回' : '要回的都處理好了'));
+    say.appendChild(document.createTextNode(pending ? '。草稿可以直接改字按「複製」，或在下面打「1 回了」「2 不用回」。' : '。'));
+  } else {
+    say.textContent = lead + (unfinished ? '，目前還沒有要你回的。' : (n ? '，沒有需要你回的。' : '。'));
+    say.className = 'say';   // 沒做完的輪次不能說成「沒有要回的」（Codex 審 b75099a9）
+  }
+  box.appendChild(say);
+  if(drafts.length) box.appendChild(el('div','h','要回的訊息'));
+  drafts.forEach(function(d){ box.appendChild(draftCard(d)); });
+  if(opened.length){
+    var det = el('details'); det.appendChild(el('summary',null,'點開的聊天室（'+opened.length+'）'));
+    var ul = el('ul','bul'); opened.forEach(function(o){ ul.appendChild(el('li',null,o.name)); });
+    det.appendChild(ul); box.appendChild(det);
+  }
+  m.appendChild(turn);
+}
+
+function draftCard(d){
+  var c = el('div','card');
+  var to = el('div','to');
+  if(NUM[d.card_id] && !d.decision) to.appendChild(el('span','num',String(NUM[d.card_id])));
+  to.appendChild(document.createTextNode('給 '+d.chat)); c.appendChild(to);
+  if(d.head) c.appendChild(el('div','quote',d.head));
+  var ta = el('textarea'); ta.value = EDITS[d.card_id] != null ? EDITS[d.card_id] : (d.draft||'');
+  ta.setAttribute('aria-label','回覆草稿（可直接修改）');
+  function fit(){ ta.style.height='auto'; ta.style.height=(ta.scrollHeight+2)+'px'; }
+  var note = el('div','edited','');
+  ta.oninput = function(){ EDITS[d.card_id] = ta.value; fit(); note.textContent = ta.value !== d.draft ? '已修改（複製的是你改過的版本）' : ''; };
+  c.appendChild(ta); c.appendChild(note); setTimeout(fit,0);
+  if(ta.value !== d.draft) note.textContent = '已修改（複製的是你改過的版本）';
+  if(d.decision){
+    var done = el('div','done'+(d.decision==='ok'?'':' no'));
+    done.appendChild(el('span',null, d.decision==='ok' ? '✓ 已回'+(d.decided_at?'（'+hm(d.decided_at)+'）':'') : (d.decision==='no'?'標記為不用回':'卡片對不上，未採用')));
+    var again = el('button','link','複製');
+    again.onclick = function(){ copyText(ta.value, function(c){ toast(c ? '已複製，到 LINE 貼上即可' : '複製失敗，請長按文字複製'); }); };
+    done.appendChild(again); c.appendChild(done);
+  } else if(d.card_id){
+    var acts = el('div','acts');
+    var ok = el('button','pill main','複製並標記已回'), no = el('button','pill alt','不用回');
+    // 複製必須在點擊當下同步做（iOS／LINE 內建瀏覽器只准使用者手勢內寫剪貼簿）
+    ok.onclick = function(){ copyText(ta.value, function(cp){ decide(d, 'ok', cp); }); };
+    no.onclick = function(){ decide(d, 'no'); };
+    acts.appendChild(ok); acts.appendChild(no); c.appendChild(acts);
+  }
+  return c;
+}
+
+function renderChat(m){
+  // 還沒有巡查輪次時照樣顯示對話（舊版在這裡直接 return，早上 10 點前整串對話都看不到）
+  var st = DATA.state && DATA.state.rounds ? DATA.state : {rounds:{}};
+  if(!Object.keys(st.rounds).length && !chat().length){ m.appendChild(el('div','empty','今天還沒有跑過')); return; }
+  // 主角是要回的草稿：沒有草稿的輪次併成一行（可展開），有草稿的輪次照時間排在下面
+  var keys = Object.keys(st.rounds).sort(function(x,y){ var a=(st.rounds[x].at||'')+x, b=(st.rounds[y].at||'')+y; return a<b?-1:a>b?1:0; })   /* 照執行時間排，過午夜的輪次排在後面 */;
+  function done(k){ var x = st.rounds[k].result; return !x || x === 'done' || x === 'no_unread'; }
+  // 收合的只有「做完了、又沒有草稿」的輪次；沒做完的一律攤開（Codex 審 d39de488：partial 被藏進收合）
+  var quiet = keys.filter(function(k){ return !(st.rounds[k].drafts||[]).length && done(k); });
+  var loud = keys.filter(function(k){ return quiet.indexOf(k) < 0; });
+  if(quiet.length){
+    var det = el('details','fold');
+    var seen = quiet.reduce(function(a,k){ return a + ((st.rounds[k].opened||[]).length || st.rounds[k].opened_count || 0); }, 0);
+    det.appendChild(el('summary',null,'另外 '+quiet.length+' 輪沒有需要你回的（共看了 '+seen+' 間）'));
+    quiet.forEach(function(k){ renderRound(det, k, st.rounds[k]); });
+    m.appendChild(det);
+  }
+  var items = loud.map(function(k){ return {at: st.rounds[k].at || '', round: k}; })
+    .concat(chat().map(function(x){ return {at: x.at || '', msg: x}; }))
+    .sort(function(a,b){ return a.at<b.at?-1:a.at>b.at?1:0; });
+  var last = '';
+  items.forEach(function(it){
+    if(sepNeeded(last, it.at)) m.appendChild(el('div','sep', when(it.at)));
+    last = it.at || last;
+    if(it.round) renderRound(m, it.round, st.rounds[it.round]); else renderMsg(m, it.msg);
+  });
+  var pend = 0; keys.forEach(function(k){ (st.rounds[k].drafts||[]).forEach(function(d){ if(!d.decision) pend++; }); });
+  if(!pend && keys.every(done) && !chat().length) m.appendChild(el('div','empty','目前沒有要你回的'));
+}
+
+/** 置中時間分隔線（Grok Bot：「昨天 下午11:49」）：第一則、換日、或相隔 20 分鐘以上才出現。 */
+function sepNeeded(prev, at){
+  if(!at) return false;
+  if(!prev) return true;
+  if(prev.slice(0,10) !== at.slice(0,10)) return true;
+  return (Date.parse(at+'+08:00') - Date.parse(prev+'+08:00')) > 20*60e3;
+}
+function when(at){
+  var today = new Date(Date.now()+8*3600e3).toISOString().slice(0,10);
+  var y = new Date(Date.now()-16*3600e3).toISOString().slice(0,10);
+  var d = at.slice(0,10), h = parseInt(at.slice(11,13),10), mm = at.slice(14,16);
+  var t = (h<12?'上午':'下午') + ((h%12)||12) + ':' + mm;
+  return (d===today ? '今天 ' : d===y ? '昨天 ' : (parseInt(at.slice(5,7),10)+'/'+parseInt(at.slice(8,10),10)+' ')) + t;
+}
+
+function chat(){ return (DATA && DATA.chat) || []; }
+
+/** 畫面上待回草稿的編號：照輪次時間排，1 起算。律師打「1 回了」時，頁面把這份對照一起送出，本機照它找卡片。 */
+function numberDrafts(){
+  NUM = {}; var st = DATA && DATA.state, n = 0;
+  if(!st || !st.rounds) return;
+  Object.keys(st.rounds).sort(function(x,y){ var a=(st.rounds[x].at||'')+x, b=(st.rounds[y].at||'')+y; return a<b?-1:a>b?1:0; })
+    .forEach(function(k){ (st.rounds[k].drafts||[]).forEach(function(d){ if(d.card_id && !d.decision) NUM[d.card_id] = ++n; }); });
+}
+
+var ASK_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8.5 8.5 0 0 1-12.6 7.4L3 21l1.6-5.1A8.5 8.5 0 1 1 21 12z"/><path d="M8 12h.01M12 12h.01M16 12h.01"/></svg>';
+
+function renderMsg(m, x){
+  if(x.role === 'me'){
+    if(x.quote) m.appendChild(el('div','meq','↩ '+x.quote));
+    if(x.att){ var mi = el('div','meimg');
+      if(LOCALIMG[x.id]){ var im = el('img'); im.src = LOCALIMG[x.id]; im.alt = '你附的圖'; mi.appendChild(im); }
+      else mi.appendChild(el('span',null,'🖼 附了一張圖'));
+      m.appendChild(mi); }
+    var w = el('div','me'), b = el('div'); b.textContent = x.text;
+    if(x.reaction) b.appendChild(el('span','rx',x.reaction));
+    bindMenu(b, {id:x.id, text:x.text, reaction:x.reaction});
+    w.appendChild(b); m.appendChild(w);
+    if(x.status === 'pending'){
+      var t = el('div','turn'), box = el('div','msg think');
+      var waited = (Date.now() - Date.parse(String(x.at||'').replace(' ','T')+'+08:00'))/1000;
+      if(waited > 180){ box.textContent = 'Mac 還沒接手（可能闔上或在睡眠），開機後會回你。'; }
+      else { box.appendChild(el('i')); box.appendChild(el('i')); box.appendChild(el('i')); box.appendChild(document.createTextNode(' 正在看…')); }
+      t.appendChild(box); m.appendChild(t);
+    }
+    return;
+  }
+  var turn = el('div','turn');
+  var box = el('div','msg'+(x.failed?' fail':''));
+  // 程式核對後實際做了的動作（本機附在回覆末尾、每行「✓ 」開頭）＝置中系統列，像 Grok Bot 的「已更新 例行任務」
+  var lines = String(x.text||'').split('\n'), acts = [];
+  while(lines.length && /^✓ /.test(lines[lines.length-1])) acts.unshift(lines.pop().slice(2));
+  while(lines.length && !lines[lines.length-1].trim()) lines.pop();
+  var q = chat().filter(function(y){ return y.id === x.reply_to; })[0];
+  if(q){ var a = el('div','ask'); a.innerHTML = ASK_ICON; a.appendChild(el('span',null,'“'+(q.text.length>40?q.text.slice(0,40)+'…':q.text)+'”')); box.appendChild(a); }
+  box.appendChild(el('div','txt', lines.join('\n')));
+  (x.drafts||[]).forEach(function(d, i){ box.appendChild(replyDraft(d, x.id+'#'+i)); });
+  if(x.reaction) box.appendChild(el('span','rx',x.reaction));
+  bindMenu(box, {id:x.id, text:lines.join('\n'), reaction:x.reaction});
+  turn.appendChild(box); m.appendChild(turn);
+  acts.forEach(function(a){ m.appendChild(el('div','sys', a)); });
+  // 選項按鈕（Grok Bot：「要每天自動讀好友貼文嗎？」三個選項）：只在最新一則回答、你還沒回之前出現；點一下＝送出那句
+  var all = chat();
+  if((x.choices||[]).length && all[all.length-1] === x){
+    var o = el('div','opts');
+    x.choices.forEach(function(c){ var b = el('button',null,c); b.onclick = function(){ Q.value = c; fitQ(); SEND.onclick(); }; o.appendChild(b); });
+    m.appendChild(o);
+  }
+}
+
+/** 回答裡的草稿：可改字、複製（Claude Bot 不會自己送 LINE）。 */
+function replyDraft(d, key){
+  var c = el('div','card');
+  if(d.to) c.appendChild(el('div','to','給 '+d.to));
+  var ta = el('textarea'); ta.value = EDITS[key] != null ? EDITS[key] : d.text; ta.setAttribute('aria-label','草稿（可直接修改）');
+  function fit(){ ta.style.height='auto'; ta.style.height=(ta.scrollHeight+2)+'px'; }
+  ta.oninput = function(){ EDITS[key] = ta.value; fit(); }; setTimeout(fit,0);
+  c.appendChild(ta);
+  var acts = el('div','acts'), cp = el('button','pill main','複製');
+  cp.onclick = function(){ copyText(ta.value, function(ok){ toast(ok ? '已複製，到 LINE 貼上即可' : '複製失敗，請長按文字複製'); }); };
+  acts.appendChild(cp); c.appendChild(acts);
+  return c;
+}
+
+var SLOTS_OPEN = false;
+/** Bot 個人頁（Grok Bot 實機：點名稱膠囊→大頭像、名稱、例行任務；每項＝任務名稱＋頻率＋開關）。 */
+function renderTasks(m){
+  var s = DATA.settings || {};
+  var slots = (s.slots || ['10:00','16:00','21:00']).slice().sort();
+  var prof = el('div','prof');
+  prof.innerHTML = document.querySelector('.logo').outerHTML.replace('class="logo"','');
+  prof.appendChild(el('b',null,'Claude Bot')); prof.appendChild(el('small',null,'看 LINE 綠點、讀訊息、擬回覆草稿；不會自己送出'));
+  m.appendChild(prof);
+  m.appendChild(el('div','sect','例行任務'));
+  var list = el('div','list');
+  // ① 巡查：頻率＝時段；點一下展開改時段（每項任務只有一個主角：名稱＋頻率）
+  var it = el('div','item tap'), tx = el('div','tx');
+  tx.appendChild(el('div',null,'LINE 綠點巡查')); tx.appendChild(el('small',null,'每天 '+slots.join('、')+' 左右'));
+  it.appendChild(tx); it.appendChild(el('span','quiet', SLOTS_OPEN ? '收起' : '改時段'));
+  it.onclick = function(){ SLOTS_OPEN = !SLOTS_OPEN; render(); };
+  list.appendChild(it);
+  var box = el('div','slots'+(SLOTS_OPEN?' on':'')), chips = el('div','chips');
+  slots.forEach(function(t){
+    var c = el('span',null,t), x = el('button','x','×'); x.setAttribute('aria-label','刪除 '+t);
+    x.onclick = function(){
+      var cur = (DATA.settings.slots || slots).slice();   // 用按下當時最新的設定算，不用畫面重繪前的舊清單（Codex 審 b75099a9）
+      if(cur.length<=1){ toast('至少要留一個時段'); return; }
+      save('slots', cur.filter(function(v){return v!==t;}).join(','));
+    };
+    c.appendChild(x); chips.appendChild(c);
+  });
+  box.appendChild(chips);
+  var add = el('div','add'); var inp = el('input'); inp.type='time'; inp.value=NEWSLOT;
+  inp.oninput = function(){ NEWSLOT = inp.value; };
+  var b = el('button','pill alt','新增'); b.onclick = function(){
+    var cur = (DATA.settings.slots || slots).slice();
+    if(!/^\d{2}:\d{2}$/.test(NEWSLOT)){ toast('先選時間'); return; }
+    if(cur.indexOf(NEWSLOT)>=0){ toast('已經有這個時段'); return; }
+    var sent = NEWSLOT;
+    save('slots', cur.concat([sent]).sort().join(','), function(){ if(NEWSLOT === sent) NEWSLOT=''; });   // 先清再重繪，輸入框與狀態一致
+  };
+  add.appendChild(inp); add.appendChild(b); box.appendChild(add); list.appendChild(box);
+  list.appendChild(sw('drafts','擬回覆草稿','跟著每輪巡查・只給你看，不會自動送出'));
+  list.appendChild(sw('auto_like','生日、喜事按讚','跟著每輪巡查・點開時當場按讚'));
+  m.appendChild(list);
+  // 長期規則：在對話裡說「以後…」記下的，每輪擬稿照做（Grok Bot：說一次就一直照做）
+  m.appendChild(el('div','sect','長期規則（在對話裡說「以後…」就會記下）'));
+  var rl = el('div','list'), rules = (s.rules || []);
+  if(!rules.length) rl.appendChild(el('div','rule', '還沒有。例：在對話裡打「以後草稿開頭不要用名字稱呼」'));
+  rules.forEach(function(r){
+    var row = el('div','rule'); row.appendChild(el('span',null,r));
+    var x = el('button','x','×'); x.setAttribute('aria-label','刪除這條規則');
+    x.onclick = function(){ var cur = (DATA.settings.rules || []).filter(function(v){ return v !== r; }); save('rules', JSON.stringify(cur)); };
+    row.appendChild(x); rl.appendChild(row);
+  });
+  m.appendChild(rl);
+  m.appendChild(el('div','foot','案件群、利衝名單、家人、未加白名單的社群一律不點開。設定第 '+(s.rev||0)+' 版'+(s.updatedAt?'・'+s.updatedAt:'')));
+}
+
+function sw(name, label, hint){
+  var s = DATA.settings||{}, it = el('div','item'), tx = el('div','tx');
+  tx.appendChild(el('div',null,label)); tx.appendChild(el('small',null,hint)); it.appendChild(tx);
+  var b = el('button','sw'+(s[name]===true?' on':'')); b.setAttribute('aria-label',label); b.setAttribute('role','switch');
+  b.setAttribute('aria-checked', s[name]===true ? 'true':'false');
+  b.onclick = function(){ save(name, s[name]===true ? 'false' : 'true'); };
+  it.appendChild(b); return it;
+}
+
+function header(){
+  var st = DATA && DATA.state, pend = 0;
+  Object.values((st&&st.rounds)||{}).forEach(function(x){ (x.drafts||[]).forEach(function(d){ if(!d.decision) pend++; }); });
+  var at = st && st.pushedAt ? '・巡查結果 '+String(st.pushedAt).slice(5,16).replace('T',' ')+' 更新' : '';
+  document.getElementById('hd').textContent = (st && st.day ? (pend ? pend+' 則待回' : '沒有待回') : '尚無紀錄') + at;
+}
+
+function render(){
+  var m = document.getElementById('main'); m.textContent='';
+  if(DATA){ numberDrafts(); header(); }   // 待回數每次重繪都重算（Codex 審 b75099a9：按完頁首還寫 1 則待回）
+  document.getElementById('dock').className = 'dock' + (VIEW==='tasks' ? ' hide' : '');
+  document.getElementById('back').hidden = VIEW!=='tasks';
+  document.getElementById('tasks').hidden = VIEW==='tasks';
+  document.getElementById('ttl').textContent = VIEW==='tasks' ? '例行任務' : 'Claude Bot';
+  if(!DATA){ m.appendChild(el('div','empty','讀取中…')); return; }
+  if(VIEW==='tasks') renderTasks(m); else renderChat(m);
+}
+
+var SAVING = false;
+async function save(name, value, onOk){
+  if(SAVING){ toast('上一個變更還在存，稍等一下'); return false; }   // 一次只送一個變更：連續刪除不會拿舊清單覆蓋
+  SAVING = true;
+  try{
+    var r = await api({op:'set', name:name, value:value});
+    if(!r.ok){ toast('沒存成：'+(r.msg==='bad setting'?'格式不對':r.msg)); return false; }
+    if(!DATA.settings || (r.settings.rev||0) >= (DATA.settings.rev||0)) DATA.settings = r.settings;
+    if(onOk) onOk();
+    render(); toast('已存，下一輪生效'); return true;
+  }catch(e){ toast('連線失敗，請再按一次'); return false; }
+  finally{ SAVING = false; }
+}
+
 async function decide(d, decision, copied){
   try{
     var r = await api({op:'decide', card:d.card_id, decision:decision});
     if(!r.ok){ toast('沒記成：'+(r.msg||'')); return; }
-    d.decision = (r.already||r.recorded).decision;
-    if(d.decision==='ok') d.send='已記下';
+    var rec = r.already || r.recorded; d.decision = rec.decision; d.decided_at = rec.at;
     render();
     var base = r.already ? '這則先前已按過，以那次為準' : '已記下';
-    toast(decision==='ok' ? base + (copied ? '，全文已複製，到 LINE 貼上即可' : '；複製失敗，請按「複製全文」') : base);
+    toast(decision==='ok' ? (copied ? '已複製，到 LINE 貼上即可' : base+'；複製失敗，請按「複製」') : base);
   }catch(e){ toast('連線失敗，請再按一次'); }
 }
 
 async function load(){
   var r = await api({op:'state'});
-  if(!r.ok){ document.getElementById('hd').textContent='⚠️ '+(r.msg==='forbidden'?'只有王律師本人可以看':r.msg||'讀取失敗'); return false; }
-  DATA = r; var st = r.state;
-  document.getElementById('hd').textContent = st && st.day ? st.day+'・今日巡查紀錄' : '尚無紀錄';
+  if(!r.ok){ document.getElementById('hd').textContent=(r.msg==='forbidden'?'只有王律師本人可以看':r.msg||'讀取失敗'); return false; }
+  DATA = r;
   return true;
 }
 
-document.getElementById('tab-today').onclick=function(){TAB='today';render();};
-document.getElementById('tab-tasks').onclick=function(){TAB='tasks';render();};
+// 底部輸入框：送出＝存到 GAS（pending），Mac 上的 Claude 讀到後回答；等回覆時每 4 秒看一次
+var Q = document.getElementById('q'), SEND = document.getElementById('send'), SENDING = false;
+function fitQ(){ Q.style.height='auto'; Q.style.height=Math.min(Q.scrollHeight,160)+'px'; SEND.disabled = SENDING || (!Q.value.trim() && !ATT) || !TOKEN; }
+// 附加圖片（Grok Bot 的 ＋→附加檔案）：先壓成長邊 1600px JPEG，送出時 POST 到 GAS（快取 6 小時），Mac 取走後給工作階段看
+var ATT = null, LOCALIMG = {}, FILE = document.getElementById('file');
+function setAtt(a){ ATT = a; document.getElementById('ap').className = a ? 'on' : ''; if(a) document.getElementById('api').src = a.url;
+  document.getElementById('barbox').className = 'bar' + (REPLY ? ' quoting' : '') + (a ? ' att' : ''); fitQ(); }
+document.getElementById('plus').onclick = function(){ FILE.value = ''; FILE.click(); };
+document.getElementById('apx').onclick = function(){ setAtt(null); };
+FILE.onchange = function(){
+  var f = FILE.files && FILE.files[0]; if(!f) return;
+  var img = new Image(), u = URL.createObjectURL(f);
+  img.onload = function(){
+    var k = Math.min(1, 1600 / Math.max(img.width, img.height)), c = document.createElement('canvas');
+    c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    var url = c.toDataURL('image/jpeg', 0.8), b64 = url.split(',')[1];
+    if(b64.length > 700000){ url = c.toDataURL('image/jpeg', 0.6); b64 = url.split(',')[1]; }
+    if(b64.length > 700000){ toast('圖太大，請截小一點再傳'); return; }
+    setAtt({url:url, b64:b64, mime:'image/jpeg'}); URL.revokeObjectURL(u); Q.focus();
+  };
+  img.onerror = function(){ toast('這個檔案讀不了，請選圖片'); };
+  img.src = u;
+};
+async function upload(cid, a){
+  var res = await fetch(GAS, {method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body: JSON.stringify({action:'claudeBotPush', token:TOKEN, upload:{cid:cid, mime:a.mime, b64:a.b64}})});
+  var r = await res.json();
+  if(!r.ok) throw new Error(r.msg === 'forbidden' ? '身分驗證失敗' : '圖沒傳成');
+  return r.att;
+}
+Q.oninput = fitQ;
+SEND.onclick = async function(){
+  var text = Q.value.trim(); if((!text && !ATT) || SENDING || !DATA) return;
+  if(!text) text = '（看這張圖）';
+  if(text.length > 2000){ toast('太長了（最多 2000 字）'); return; }
+  SENDING = true; fitQ();
+  var cid = (Date.now().toString(36) + Math.random().toString(36).slice(2)).replace(/[^a-z0-9]/g,'').slice(0,20);
+  var refs = {}; Object.keys(NUM).forEach(function(c){ refs[NUM[c]] = c; });
+  var att = ATT; if(att) LOCALIMG['m'+cid] = att.url;
+  var mine = {id:'m'+cid, role:'me', text:text, quote:REPLY||'', att: att ? 'pending' : '', at:new Date(Date.now()+8*3600e3).toISOString().slice(0,19), status:'pending'};
+  DATA.chat = chat().concat([mine]); Q.value=''; fitQ(); render(); bottom();
+  try{
+    var attId = '';
+    if(att){ attId = await upload(cid, att); setAtt(null); }
+    var r = await api({op:'ask', text:text, cid:cid, refs:JSON.stringify(refs), quote:REPLY||'', att:attId});
+    setReply(null);
+    if(!r.ok) throw new Error(r.msg==='too long'?'太長了':r.msg==='full'?'還有太多題沒回完，等 Claude Bot 回完再傳':r.msg||'沒送成');
+    DATA.chat = r.chat; render(); bottom(); poll();
+  }catch(e){
+    DATA.chat = chat().filter(function(x){ return x !== mine; }); Q.value = text === '（看這張圖）' ? '' : text; if(att && !ATT) setAtt(att); render(); toast('沒送成：'+(e.message||e)+'，再按一次');
+  }finally{ SENDING = false; fitQ(); }
+};
+// 兩指點擊（電腦＝右鍵 contextmenu）／長按 0.5 秒（手機）→ 選單
+var REPLY = null, MENU = document.getElementById('menu'), MCARD = document.getElementById('mcard');
+function setReply(t){ REPLY = t ? t.replace(/\s+/g,' ').trim().slice(0,200) : null;
+  document.getElementById('rqt').textContent = REPLY || ''; document.getElementById('rq').className = REPLY ? 'on' : '';
+  document.getElementById('barbox').className = 'bar' + (REPLY ? ' quoting' : ''); Q.placeholder = REPLY ? '回覆…' : '傳訊息給 Claude Bot'; if(REPLY) Q.focus(); }
+document.getElementById('rqx').onclick = function(){ setReply(null); };
+MENU.addEventListener('click', function(e){ if(e.target === MENU) MENU.className=''; });
+MENU.addEventListener('contextmenu', function(e){ e.preventDefault(); MENU.className=''; });
+var ICON_REPLY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-2"/></svg>';
+var ICON_COPY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></svg>';
+function openMenu(info, x, y, mode){
+  mode = mode || 'all';
+  var text = info.text != null ? info.text : (info.box ? info.box.innerText : '');
+  MCARD.textContent = ''; MCARD.className = 'card' + (mode==='emoji' ? ' pill' : '');
+  if(info.id && mode !== 'more'){
+    var row = el('div','emo');
+    ['👍','👎','❤️','😂','🎉'].forEach(function(e){
+      var b = el('button', info.reaction===e ? 'sel' : null, e); b.setAttribute('aria-label','表情 '+e);
+      b.onclick = function(){ MENU.className=''; react(info.id, info.reaction===e ? '' : e); };
+      row.appendChild(b);
+    });
+    MCARD.appendChild(row);
+  }
+  var r = el('button','it'); r.innerHTML = ICON_REPLY; r.appendChild(el('span',null,'回覆'));
+  r.onclick = function(){ MENU.className=''; setReply(text); };
+  if(mode === 'emoji'){ r = null; }
+  var c = el('button','it'); c.innerHTML = ICON_COPY; c.appendChild(el('span',null,'複製'));
+  c.onclick = function(){ MENU.className=''; copyText(text, function(ok){ toast(ok ? '已複製' : '複製失敗，請再試一次'); }); };
+  if(mode === 'all') MCARD.appendChild(r);
+  if(mode !== 'emoji') MCARD.appendChild(c);
+  MENU.className = 'on';
+  var w = MCARD.offsetWidth || 250, h = MCARD.offsetHeight, vw = window.innerWidth, vh = window.innerHeight;
+  MCARD.style.left = Math.max(12, Math.min(x - w/2, vw - w - 12)) + 'px';
+  MCARD.style.top = Math.max(12, Math.min(y + 12, vh - h - 12)) + 'px';
+}
+var ICON_SMILE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0"/><path d="M9 9.5h.01M15 9.5h.01"/></svg>';
+var ICON_MORE = '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>';
+function hoverBar(node, info){
+  var h = el('div','hov');
+  function btn(icon, label, fn){ var b = el('button'); b.innerHTML = icon; b.setAttribute('aria-label', label);
+    b.onclick = function(e){ e.stopPropagation(); var r = b.getBoundingClientRect(); fn(r.left + r.width/2, r.bottom); }; h.appendChild(b); }
+  if(info.id) btn(ICON_SMILE, '表情', function(x,y){ openMenu(info, x, y, 'emoji'); });
+  btn(ICON_REPLY, '回覆', function(){ setReply(info.text != null ? info.text : (info.box ? info.box.innerText : '')); });
+  btn(ICON_MORE, '更多', function(x,y){ openMenu(info, x, y, 'more'); });
+  node.appendChild(h);
+}
+function bindMenu(node, info){
+  hoverBar(node, info);
+  node.addEventListener('contextmenu', function(e){ e.preventDefault(); openMenu(info, e.clientX, e.clientY); });
+  var t = null, sx = 0, sy = 0;
+  node.addEventListener('touchstart', function(e){
+    if(e.target.closest('textarea,button,a,summary')) return;
+    var p = e.touches[0]; sx = p.clientX; sy = p.clientY;
+    t = setTimeout(function(){ t = null; if(navigator.vibrate) navigator.vibrate(10); openMenu(info, sx, sy); }, 500);
+  }, {passive:true});
+  function cancel(e){ if(!t) return; if(e && e.type==='touchmove'){ var p=e.touches[0]; if(Math.abs(p.clientX-sx)<8 && Math.abs(p.clientY-sy)<8) return; } clearTimeout(t); t = null; }
+  node.addEventListener('touchmove', cancel, {passive:true});
+  node.addEventListener('touchend', cancel);
+  node.addEventListener('touchcancel', cancel);
+}
+async function react(id, emoji){
+  var x = chat().filter(function(y){ return y.id===id; })[0]; if(!x) return;
+  var before = x.reaction; if(emoji) x.reaction = emoji; else delete x.reaction; render();
+  try{ var r = await api({op:'react', id:id, emoji:emoji}); if(!r.ok) throw new Error(r.msg); DATA.chat = r.chat; render(); }
+  catch(e){ if(before) x.reaction = before; else delete x.reaction; render(); toast('表情沒存成，再試一次'); }
+}
+
+var POLL = null;
+function waiting(){ return chat().some(function(x){ return x.role==='me' && x.status==='pending'; }); }
+function editing(){ var a = document.activeElement; return a && a.tagName==='TEXTAREA' && a.id!=='q'; }
+function poll(){
+  clearTimeout(POLL);
+  POLL = setTimeout(async function(){
+    if(document.hidden || !TOKEN){ poll(); return; }
+    try{
+      var near = document.body.scrollHeight - (window.scrollY + window.innerHeight) < 200;
+      if(waiting()){ var r = await api({op:'chat'}); if(r.ok){ var was = JSON.stringify(chat()); DATA.chat = r.chat;
+        if(JSON.stringify(r.chat) !== was && !editing()){ render(); if(near) bottom(); } } }
+      else if(!editing() && await load()){ render(); }
+    }catch(e){}
+    poll();
+  }, waiting() ? 4000 : 30000);
+}
+document.addEventListener('visibilitychange', function(){ if(!document.hidden && TOKEN) poll(); });
+function bottom(){ window.scrollTo({top:document.body.scrollHeight, behavior:'smooth'}); }
+document.getElementById('down').onclick=bottom;
+window.addEventListener('scroll',function(){
+  var far = document.body.scrollHeight - (window.scrollY + window.innerHeight) > 240;
+  document.getElementById('down').className = 'fab down' + (far ? '' : ' off');
+},{passive:true});
+document.getElementById('name').onclick=function(){ if(VIEW!=='tasks') document.getElementById('tasks').onclick(); };
+document.getElementById('tasks').onclick=function(){VIEW='tasks';location.hash='tasks';render();};
+document.getElementById('back').onclick=function(){VIEW='chat';history.replaceState(null,'',location.pathname+location.search);render();};
 
 (async function(){
   try{ await liff.init({liffId:LIFF_ID}); }
-  catch(e){ document.getElementById('hd').textContent='⚠️ LIFF 初始化失敗：'+(e.message||e); return; }
+  catch(e){ document.getElementById('hd').textContent='LIFF 初始化失敗：'+(e.message||e); return; }
   if(!liff.isLoggedIn()){ liff.login(); return; }
   TOKEN = liff.getAccessToken();
-  if(location.hash==='#tasks') TAB='tasks';
-  try{ if(await load()) render(); }
-  catch(e){ document.getElementById('hd').textContent='⚠️ '+(e.message||e); }
+  if(location.hash==='#tasks') VIEW='tasks';
+  render();
+  try{ if(await load()){ render(); fitQ(); poll(); if(VIEW==='chat') window.scrollTo(0, document.body.scrollHeight); } }
+  catch(e){ document.getElementById('hd').textContent=(e.message||String(e)); }
 })();
 </script>
 </body>
