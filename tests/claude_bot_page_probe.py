@@ -2018,11 +2018,54 @@ async def t105():   # 4agent A1：回站還原後第一次載入失敗→整頁�
     await done(p, b)
     return mid1 == {"n": 1, "kept": True} and mid2["n"] == 1 and end == {"n": 1, "kept": False, "d": True}, (mid1, mid2, end)
 
+
+async def t106():   # Codex 審 d974c16 F1：還原後、等 LIFF 期間又打了字，暫存寫不回去且 LINE 說未登入 ⇒ 不跳（新打的字不能丟）；沒改過的 t101 仍會跳
+    lj = (liff_js(profile_ok=False).replace("isLoggedIn:()=>true", "isLoggedIn:()=>sessionStorage.getItem('__nologin')!=='1'")
+          .replace("init:()=>Promise.resolve()", "init:()=>new Promise(function(r){ setTimeout(r, sessionStorage.getItem('__slow')==='1' ? 1500 : 0); })"))
+    failset = ("if(sessionStorage.getItem('__failset')==='1'){ var o = Storage.prototype.setItem;"
+               " Storage.prototype.setItem = function(k, v){ if(k === 'cb_carry_v1') throw new Error('quota'); return o.call(this, k, v); }; }")
+    c, p, b, pg, log = await _expired_page(liff=lj, init=failset)
+    await _carried_then(pg, c, "原本那則")
+    await pg.fill("#q", "原草稿")   # 讓還原後輸入框有字（這版暫存在手動重登時寫入）
+    await pg.click("#hd"); await pg.wait_for_timeout(300)
+    await pg.evaluate("sessionStorage.setItem('__nologin','1'); sessionStorage.setItem('__failset','1'); sessionStorage.setItem('__slow','1'); 0")
+    await pg.reload(); await pg.wait_for_timeout(300)
+    await pg.focus("#q"); await pg.keyboard.press("End"); await pg.keyboard.type("＋新增重要內容")
+    await pg.wait_for_timeout(1800)
+    v = await pg.evaluate("({login: window.__login.length, q: document.getElementById('q').value, main: document.getElementById('main').innerText})")
+    await done(p, b)
+    return v["login"] == 0 and v["q"].endswith("＋新增重要內容") and "暫存不下" in v["main"], v
+
+
+async def t107():   # Codex 審 d974c16 F5：例行任務頁重登→回站仍未登入→再登入→回站 ⇒ 仍在例行任務頁；未登入直接開 #tasks 也一樣
+    lj = liff_js(profile_ok=False).replace("isLoggedIn:()=>true", "isLoggedIn:()=>sessionStorage.getItem('__nologin')!=='1'")
+    c, p, b, pg, log = await _expired_page(liff=lj)
+    await pg.evaluate("document.getElementById('tasks').onclick(); 0"); await pg.wait_for_timeout(200)
+    await pg.evaluate("kick(true); 0"); await pg.wait_for_timeout(600)   # 空畫面 ⇒ 自動重登（第一次跳）
+    await pg.evaluate("sessionStorage.setItem('__nologin','1'); 0")
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(600)   # 回站仍未登入 ⇒ 第二次跳
+    second = await pg.evaluate("({n: window.__login.length, view: sessionStorage.getItem('cb_view')})")
+    await pg.evaluate("sessionStorage.removeItem('__nologin'); 0"); c["mode"] = "ok"
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(1000)
+    a = await pg.evaluate("({view: VIEW, hash: location.hash})")
+    await done(p, b)
+    c, h = _cloud()
+    p, b, pg, log = await page_with(h, liff=lj)
+    await pg.goto("https://x.test/"); await pg.evaluate("sessionStorage.setItem('__nologin','1'); 0")
+    await pg.goto("about:blank"); await pg.goto("https://x.test/#tasks"); await pg.wait_for_timeout(600)   # 未登入直接開 #tasks ⇒ 跳去登入（先離開再回來＝真的重新載入）
+    nb = await pg.evaluate("({n: window.__login.length, view: sessionStorage.getItem('cb_view')})")
+    await pg.evaluate("sessionStorage.removeItem('__nologin'); 0")
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(1000)   # 回站網址不帶 #
+    b2 = await pg.evaluate("({view: VIEW, hash: location.hash})")
+    await done(p, b)
+    return (second["n"] == 1 and second["view"] == "tasks" and a == {"view": "tasks", "hash": "#tasks"}
+            and nb == {"n": 1, "view": "tasks"} and b2 == {"view": "tasks", "hash": "#tasks"}), (second, a, nb, b2)
+
 MATRIX = [t01, t02, t03, t04, t05, t06, t07, t08, t09, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20,
           t21, t22, t23, t24, t25, t26, t27, t28, t29, t30, t31, t32, t33, t34, t35, t36, t37,
           t38, t39, t40, t41, t42, t43, t44, t45, t46, t47, t48, t49, t50, t51, t52, t53, t54, t55, t56, t57, t58, t59, t60, t61, t62, t63, t64,
           t65, t66, t67, t68, t69, t70, t71, t72, t73, t74, t75, t76, t77, t78, t79, t80, t81, t82, t83, t84, t85,
-          t86, t87, t88, t89, t90, t91, t92, t93, t94, t95, t96, t97, t98, t99, t100, t101, t102, t103, t104, t105]
+          t86, t87, t88, t89, t90, t91, t92, t93, t94, t95, t96, t97, t98, t99, t100, t101, t102, t103, t104, t105, t106, t107]
 EXISTING = [t_cid_reused_after_timeout, t_failure_keeps_new_draft_and_quote, t_stale_poll_does_not_drop_new_message,
             t_teach_menu_keeps_draft, t_teach_record_flow, t_teach_review_84b793d, t_teach_out_of_order, t_teach_stop_response_late, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
             t_fail_after_typing_keeps_draft_and_unsent_full, t_fail_untouched_keeps_whole_message,

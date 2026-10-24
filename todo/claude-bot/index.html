@@ -1335,10 +1335,13 @@ function carryRestore(){
   var c = env.composer;
   COMPOSER = {draftId:++freshComposer.n, rev:0, rawText:c.rawText, quote:c.quote || null, asset:c.asset ? objs[c.asset] : null, imageJobId:0, originMid:c.originMid || null};
   paintComposer();
+  CARRY_SIG = carrySig();   // 還原當下的內容指紋：之後判斷「畫面有沒有被改過」
   CARRY_RESTORED = true;   // 暫存先留著，第一次載入成功才刪（4agent 工具裁決 A1：還原當下就刪，之後未登入又存不回去＝只剩記憶體）；boot 重試不會再呼叫 carryRestore
   var n = env.msgs.filter(function(m){ return m.status !== 'accepted'; }).length;
   CARRY_NOTE = '重新登入好了：' + (n ? n+' 則還沒確認送到的訊息留在下面（可重試或放回）' : '') + (n && (c.rawText || c.quote || c.asset) ? '，' : '') + ((c.rawText || c.quote || c.asset) ? '輸入框的內容已放回' : '');
 }
+var CARRY_SIG = null;
+function carrySig(){ try{ syncDom(); var e = carryEnvelope(); delete e.savedAt; return JSON.stringify(e); }catch(err){ return ''; } }   // 內容指紋（不含存檔時間）
 function carryKeyPresent(){ try{ return sessionStorage.getItem(CARRY_KEY) !== null; }catch(e){ return false; } }
 function rememberView(){ try{ if(VIEW === 'tasks') sessionStorage.setItem('cb_view', 'tasks'); else sessionStorage.removeItem('cb_view'); }catch(e){} }
 function takeView(){ var v = null; try{ v = sessionStorage.getItem('cb_view'); sessionStorage.removeItem('cb_view'); }catch(e){} return v; }
@@ -1437,10 +1440,14 @@ document.getElementById('back').onclick=function(){VIEW='chat';history.replaceSt
 
 carryRestore();   // 同步、在等 LINE／雲端之前：重新登入跳轉帶回的訊息與輸入框先放回，律師打字不會跟還原搶
 (async function(){
+  // 分頁要在任何登入跳轉之前先定：不然未登入路徑的 rememberView 會拿預設 chat 把記住的 tasks 洗掉（Codex 審 d974c16 F5）
+  if(location.hash==='#tasks') VIEW='tasks';
+  else if(takeView() === 'tasks'){ VIEW = 'tasks'; history.replaceState(null, '', location.pathname + location.search + '#tasks'); }   // 登入跳轉前在例行任務頁：回來還在那頁（Codex 審 50f9356 F5）
   try{ await liff.init({liffId:LIFF_ID}); }
   catch(e){ document.getElementById('hd').textContent='LIFF 初始化失敗：'+(e.message||e); return; }
   if(!liff.isLoggedIn()){   // 剛還原的訊息先存回去再跳（Codex 審 0537fb5 P1）；存不回去但還原那份還在＝照樣安全，兩者都沒有才不跳（Codex 審 50f9356 F1）
-    if(!carrySave() && !carryKeyPresent()){ BOOT.msg = '登入過期，但畫面上的內容暫存不下，先不跳轉（請先把要送的字複製起來）'; render(); return; }
+    // 存不回去時，只有「畫面內容＝還原那份」才放行；等 LIFF 期間又打了字就不跳（Codex 審 d974c16 F1：只看舊鍵在不在會丟新字）
+    if(!carrySave() && !(carryKeyPresent() && CARRY_SIG !== null && carrySig() === CARRY_SIG)){ BOOT.msg = '登入過期，但畫面上的內容暫存不下，先不跳轉（請先把要送的字複製起來）'; render(); return; }
     rememberView(); liff.login({redirectUri: location.origin + location.pathname}); return; }   // redirectUri 不得帶 #（RFC 6749 §3.1.2），分頁另記
   if(/ Line\//i.test(navigator.userAgent)){   // LINE 內建瀏覽器沒有「加入主畫面」（10-24 律師實測）；openExternalBrowser=1 是 LINE 官方的外開參數
     var bar = el('div', null, '在 LINE 裡開的頁面不能「加入主畫面」。'), topH = (document.querySelector('.top') || {}).offsetHeight || 56;
@@ -1451,8 +1458,6 @@ carryRestore();   // 同步、在等 LINE／雲端之前：重新登入跳轉帶
     bar.appendChild(go); document.body.insertBefore(bar, document.body.firstChild);
   }
   TOKEN = liff.getAccessToken();
-  if(location.hash==='#tasks') VIEW='tasks';
-  else if(takeView() === 'tasks'){ VIEW = 'tasks'; history.replaceState(null, '', location.pathname + location.search + '#tasks'); }   // 登入跳轉前在例行任務頁：回來還在那頁（Codex 審 50f9356 F5）
   render();
   boot();   // 第一次讀不到也會自己重試（舊頁在這裡失敗就永遠不輪詢）
 })();
