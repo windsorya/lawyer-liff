@@ -1161,7 +1161,7 @@ async def t54():   # 舊版本晚到不倒退；同一份較晚重讀時「雲�
 async def t55():   # 手機真的讀取失敗 90 秒以上：寫明是手機連不上（不是 Mac）
     import time
     now_ms = int(time.time() * 1000)
-    init = ("window.__off=0;(function(){var n=Date.now;Date.now=function(){return n()+window.__off;};"
+    init = ("window.__off=0;(function(){var n=Date.now;Date.now=function(){return n()+window.__off;};var pn=performance.now.bind(performance);performance.now=function(){return pn()+window.__off;};"
             "var st=window.setTimeout;window.setTimeout=function(f,d){if(d===10000)d=80;return st.call(window,f,d);};})();")
     dead = {"on": False}
 
@@ -1195,7 +1195,7 @@ async def t57():   # 本機排隊太多時送來的降級列「另外還有 N �
 async def t58():   # 打字中輪詢暫停 4 分鐘：不得誤報手機斷線、Mac 沒回報或卡住；進度區照重畫並註明幾點讀到的
     import time
     now_ms = int(time.time() * 1000)
-    init = "window.__off=0;(function(){var n=Date.now;Date.now=function(){return n()+window.__off;};})();"
+    init = "window.__off=0;(function(){var n=Date.now;Date.now=function(){return n()+window.__off;};var pn=performance.now.bind(performance);performance.now=function(){return pn()+window.__off;};})();"
     p, b, pg = await _wk_page(lambda q: _work(now_ms), init=init, fast=False)
     await pg.evaluate("""() => { const t = document.createElement('textarea'); t.id = 'probeEdit'; document.body.appendChild(t); t.focus();
       window.__off = 4*60*1000; paintWork(); }""")
@@ -1208,7 +1208,7 @@ async def t58():   # 打字中輪詢暫停 4 分鐘：不得誤報手機斷線�
 async def t59():   # 讀取結果分類（設計者 T09）：ok:false、缺 work、壞格式、例外都算讀取異常且保留舊卡；有效空清單才清空並恢復
     import time
     now_ms = int(time.time() * 1000)
-    init = "window.__off=0;(function(){var n=Date.now;Date.now=function(){return n()+window.__off;};})();"
+    init = "window.__off=0;(function(){var n=Date.now;Date.now=function(){return n()+window.__off;};var pn=performance.now.bind(performance);performance.now=function(){return pn()+window.__off;};})();"
     p, b, pg = await _wk_page(lambda q: _work(now_ms), init=init, fast=False)
     v = await pg.evaluate("""a => { const out = [];
       for (const r of [{ok: false, msg: 'forbidden'}, {ok: true}, {ok: true, work: {items: 'x'}}, null]) {
@@ -1227,9 +1227,11 @@ async def t60():   # 打字中首次收到進度（設計者 T10）：馬上出�
     v = await pg.evaluate("""w => { const t = document.createElement('textarea'); t.id = 'probeEdit'; t.value = '打到一半'; document.body.appendChild(t); t.focus();
       const before = !!document.getElementById('wkbox') && document.getElementById('wkbox').innerText;
       workObserve({ok: true, work: w});
-      return {before: before, after: %s, focus: document.activeElement === t, val: t.value}; }""" % WK_TXT, _work(now_ms))
+      t.setSelectionRange(1, 3);
+      workObserve({ok: true, work: Object.assign({}, w, {seq: w.seq + 1})});
+      return {before: before, after: %s, focus: document.activeElement === t, val: t.value, sel: [t.selectionStart, t.selectionEnd]}; }""" % WK_TXT, _work(now_ms))
     await done(p, b)
-    return (not v["before"]) and "交辦單進度" in v["after"] and v["focus"] and v["val"] == "打到一半", v
+    return (not v["before"]) and "交辦單進度" in v["after"] and v["focus"] and v["val"] == "打到一半" and v["sel"] == [1, 3], v
 
 
 async def t61():   # 完成與通知分離（設計者 T14）：通知還沒送到就不能說「結果貼在上面」
@@ -1275,9 +1277,35 @@ async def t62():   # Codex 審 1a4ee7f：hm() 被進度區同名函式蓋掉 ⇒
     return v["hm"] == "10:05" and not v.get("bad") and v["strSeqRejected"] and "undefined" not in v["txt"] and "施工中" in v["txt"], v
 
 
+
+async def t63():   # 設計者 ec1352 T02／T08／T09：欄位型別錯整份拒收；通知狀態缺欄＝不明；進度條是活動條（新動作流動、久無動作變灰），不是時間比例
+    import time
+    now_ms = int(time.time() * 1000)
+    p, b, pg = await _wk_page()
+    base_w = _work(now_ms)
+    bad = []
+    for mut in ({"elapsed_s": "600"}, {"steps": -1}, {"idle_s": -5}, {"ahead": 1.5}):
+        w = json.loads(json.dumps(base_w)); w["seq"] += 1; w["items"][0].update(mut); bad.append(w)
+    w2 = json.loads(json.dumps(base_w)); w2["seq"] += 1; w2["items"].append({"id": "more", "status": "more", "count": -1}); bad.append(w2)
+    w3 = json.loads(json.dumps(_done_work(now_ms))); w3["seq"] = base_w["seq"] + 1; w3["items"][0]["notice_posted"] = "false"; bad.append(w3)
+    w4 = json.loads(json.dumps(base_w)); w4["seq"] = 2 ** 60; bad.append(w4)
+    unk = json.loads(json.dumps(_done_work(now_ms))); unk["seq"] = base_w["seq"] + 4; unk["items"][0].pop("notice_posted")   # 版本比 quiet 新
+    quiet = json.loads(json.dumps(base_w)); quiet["seq"] = base_w["seq"] + 3; quiet["items"][0]["idle_s"] = 600
+    v = await pg.evaluate("""a => { const out = {rej: []};
+      workObserve({ok: true, work: a.base}); const good = WORK.seq;
+      out.lively = document.querySelector('.wk .pb i').className;
+      for (const w of a.bad) { WORK_FAIL_AT = 0; workObserve({ok: true, work: w}); out.rej.push(WORK.seq === good && !!WORK_FAIL_AT); }
+      workObserve({ok: true, work: a.quiet}); out.quiet = document.querySelector('.wk .pb i').className;
+      out.width = document.querySelector('.wk .pb i').style.width;
+      workObserve({ok: true, work: a.unk}); out.unk = %s; return out; }""" % WK_TXT, {"base": base_w, "bad": bad, "unk": unk, "quiet": quiet})
+    await done(p, b)
+    return (all(v["rej"]) and len(v["rej"]) == 7 and v["lively"] == "run" and v["quiet"] == "idle" and v["width"] == "100%"
+            and "結果通知狀態不明" in v["unk"]), v
+
+
 MATRIX = [t01, t02, t03, t04, t05, t06, t07, t08, t09, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20,
           t21, t22, t23, t24, t25, t26, t27, t28, t29, t30, t31, t32, t33, t34, t35, t36, t37,
-          t38, t39, t40, t41, t42, t43, t44, t45, t46, t47, t48, t49, t50, t51, t52, t53, t54, t55, t56, t57, t58, t59, t60, t61, t62]
+          t38, t39, t40, t41, t42, t43, t44, t45, t46, t47, t48, t49, t50, t51, t52, t53, t54, t55, t56, t57, t58, t59, t60, t61, t62, t63]
 EXISTING = [t_cid_reused_after_timeout, t_failure_keeps_new_draft_and_quote, t_stale_poll_does_not_drop_new_message,
             t_teach_menu_keeps_draft, t_teach_record_flow, t_teach_review_84b793d, t_teach_out_of_order, t_teach_stop_response_late, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
             t_fail_after_typing_keeps_draft_and_unsent_full, t_fail_untouched_keeps_whole_message,

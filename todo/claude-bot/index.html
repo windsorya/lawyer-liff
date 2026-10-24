@@ -425,19 +425,30 @@ function renderChat(m){
 //   那一段（WORK_NOW－rx，兩個都是 GAS 的鐘）。手機沒在讀（打字時輪詢暫停）時什麼都不前進，只註明是幾點讀到的。
 // ・讀取**失敗**的期間用本機時鐘量（只量這支手機自己的事）。
 // ・進度區自己確保容器存在，不依賴整頁重畫（打字中首次收到進度也會出現）。
-var WORK = null, WORK_NOW = 0, WORK_OK_AT = 0, WORK_FAIL_AT = 0;
+var WORK = null, WORK_NOW = 0, WORK_OK_AT = 0, WORK_OK_MONO = 0, WORK_FAIL_AT = 0;   // *_MONO／WORK_FAIL_AT 用單調鐘（performance.now），校時不影響；WORK_OK_AT 只拿來顯示幾點
+function mono(){ return (window.performance && performance.now) ? performance.now() : Date.now(); }
+// 完整解碼後才改狀態（設計者 ec1352 C）：每個欄位驗型別；可選欄位缺少＝未知，型別錯＝整份拒收、保留舊卡
 var WK_STATUS = {queued:1, running:1, done:1, failed:1, needs_owner:1};
-function validItem(x){   // 每一項都要像樣：壞的一項就當整份讀取異常、保留舊卡（Codex 審 1a4ee7f：items:[null] 讓卡片消失、輪詢停止；items:[{}] 顯示「undefined ✗ 沒做成」）
+function wkSec(v){ return v === undefined || (typeof v === 'number' && isFinite(v) && v >= 0); }   // 秒數：缺少或有限非負數
+function wkInt(v){ return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0; }
+function validItem(x){
   if(!x || typeof x !== 'object') return false;
-  if(x.status === 'more') return typeof x.count === 'number';
-  return typeof x.id === 'string' && typeof x.text === 'string' && WK_STATUS[x.status] === 1;
+  if(x.status === 'more') return wkInt(x.count);
+  return typeof x.id === 'string' && typeof x.text === 'string' && WK_STATUS[x.status] === 1
+    && wkSec(x.elapsed_s) && wkSec(x.idle_s) && wkSec(x.retry_in_s) && wkSec(x.ago_s)
+    && (x.steps === undefined || wkInt(x.steps)) && (x.ahead === undefined || wkInt(x.ahead))
+    && (x.tries === undefined || wkInt(x.tries)) && (x.max_tries === undefined || wkInt(x.max_tries))
+    && (x.timeout_min === undefined || wkInt(x.timeout_min))
+    && (x.notice_posted === undefined || typeof x.notice_posted === 'boolean')
+    && (x.doing === undefined || typeof x.doing === 'string') && (x.env_note === undefined || typeof x.env_note === 'string')
+    && (x.activity === undefined || x.activity === 'unbound');
 }
-function validWork(w){ return !!w && typeof w === 'object' && typeof w.rx === 'number' && typeof w.now === 'number'
-  && typeof w.seq === 'number' && Array.isArray(w.items) && w.items.every(validItem); }   // seq 必須是數字（字串比大小會倒退）
+function validWork(w){ return !!w && typeof w === 'object' && typeof w.rx === 'number' && isFinite(w.rx) && typeof w.now === 'number' && isFinite(w.now)
+  && wkInt(w.seq) && Array.isArray(w.items) && w.items.every(validItem); }   // seq 必須是安全整數（字串比大小會倒退）
 function workObserve(r){
   var ok = !!(r && r.ok === true && 'work' in r && (r.work === null ? !WORK : validWork(r.work)));
-  if(!ok){ if(!WORK_FAIL_AT) WORK_FAIL_AT = Date.now(); paintWork(); return; }
-  WORK_OK_AT = Date.now(); WORK_FAIL_AT = 0;
+  if(!ok){ if(!WORK_FAIL_AT) WORK_FAIL_AT = mono(); paintWork(); return; }
+  WORK_OK_AT = Date.now(); WORK_OK_MONO = mono(); WORK_FAIL_AT = 0;
   var w = r.work;
   if(w){
     if(w.now > WORK_NOW) WORK_NOW = w.now;
@@ -459,15 +470,17 @@ function renderWork(m){ var box = el('div'); box.id = 'wkbox'; m.appendChild(box
 function paintWork(){
   if(VIEW !== 'chat') return;
   var b = document.getElementById('wkbox');
-  if(!b){ if(!workItems().length) return; var m = document.getElementById('main'); if(!m || !DATA) return; b = el('div'); b.id = 'wkbox'; m.appendChild(b); }
+  if(!b){ if(!workItems().length && !WORK_FAIL_AT) return; var m = document.getElementById('main'); if(!m || !DATA) return; b = el('div'); b.id = 'wkbox'; m.appendChild(b); }
   b.textContent = ''; fillWork(b);
 }
 setInterval(function(){ if(!document.hidden && (workItems().length || WORK_FAIL_AT)) paintWork(); }, 15000);
 function fillWork(m){
-  var items = workItems(); if(!items.length) return;
+  var phoneOff0 = WORK_FAIL_AT && mono() - WORK_FAIL_AT > WORK_PHONE_MS;
+  var items = workItems();
+  if(!items.length){ if(phoneOff0) m.appendChild(el('div','wk wkn warn','這支手機已經 '+ago(mono() - WORK_FAIL_AT)+'讀不到雲端，交辦單進度暫時看不到')); return; }
   var delay = Math.max(0, (WORK_NOW || WORK.now) - WORK.rx) / 1000;   // GAS 收件 → 最後一次讀到（同一個 GAS 鐘）
   var stale = delay*1000 > WORK_STALE_MS;
-  var phoneOff = WORK_FAIL_AT && Date.now() - WORK_FAIL_AT > WORK_PHONE_MS, old = Date.now() - WORK_OK_AT > WORK_OLD_MS;
+  var phoneOff = phoneOff0, old = mono() - WORK_OK_MONO > WORK_OLD_MS;
   items.forEach(function(x){
     if(x.status === 'more'){ m.appendChild(el('div','wk wkn','另外還有 '+x.count+' 件交辦單在排隊（太多放不下，輪到時會出現在這裡）')); return; }   // 本機超過雲端單值上限時的降級列
     var c = el('div','wk'), h = el('div','wkh');
@@ -476,9 +489,10 @@ function fillWork(m){
     c.appendChild(el('div','wkt','「'+x.text+'」'));
     var pb = el('div','pb'), bar = el('i'), line = '', note = '', warn = false;
     if(x.status === 'running'){
-      var used = (x.elapsed_s||0) + delay, lim = (x.timeout_min||45)*60;
-      // 這條是「時間」不是完成度：已用時間／每輪上限（設計者：不得冒稱完成百分比）
-      bar.style.width = Math.max(4, Math.min(96, used/lim*100)) + '%'; bar.className = stale ? 'idle' : 'run';
+      var used = (x.elapsed_s||0) + delay;
+      // 活動條（不是完成度）：最近有新動作就流動、雲端沒收到回報或久無動作就變灰——一眼分辨施工中還是停了（設計者 ec1352 T09：不得用時間比例冒充完成比例）
+      var lively = !stale && typeof x.idle_s === 'number' && x.idle_s + delay < 120;
+      bar.style.width = '100%'; bar.className = lively ? 'run' : 'idle';
       line = '施工中'+(x.max_tries > 1 ? '（第 '+x.tries+'／'+x.max_tries+' 次）' : '')+'・時間已用 '+ago(used*1000)+'（每輪最長 '+(x.timeout_min||45)+' 分）';
       if(x.activity === 'unbound') note = '動作紀錄暫時接不上（看不到做到哪一步，不代表停了）';
       else if(typeof x.idle_s === 'number'){ var q = x.idle_s + delay;
@@ -493,7 +507,7 @@ function fillWork(m){
     } else {
       bar.style.width = '100%'; bar.className = x.status === 'done' ? 'ok' : 'bad';
       var when = (typeof x.ago_s === 'number') ? ago((x.ago_s + delay)*1000)+'前' : '';
-      var where = x.notice_posted ? '結果已送進對話' : '結果通知還在送';   // 只講送達，不講「貼在上面」（打字中對話可能還沒重畫——Codex 審 1a4ee7f T14）
+      var where = x.notice_posted === true ? '結果已送進對話' : x.notice_posted === false ? '結果通知還在送' : '結果通知狀態不明';   // 只講送達；缺欄＝不明（設計者 ec1352 T08）
       line = x.status === 'done' ? '✓ 做完了（'+when+'），'+where : x.status === 'needs_owner' ? '要你本人處理一步（'+when+'），'+where : '✗ 沒做成（'+when+'），'+where;
     }
     pb.appendChild(bar); c.appendChild(pb);
@@ -504,7 +518,7 @@ function fillWork(m){
     m.appendChild(c);
   });
   var seen = wkHm(WORK_OK_AT);
-  if(phoneOff) m.appendChild(el('div','wkn warn','這支手機已經 '+ago(Date.now() - WORK_FAIL_AT)+'讀不到雲端（網路斷了？），上面是 '+seen+' 讀到的進度'));
+  if(phoneOff) m.appendChild(el('div','wkn warn','這支手機已經 '+ago(mono() - WORK_FAIL_AT)+'讀不到雲端（網路斷了？），上面是 '+seen+' 讀到的進度'));
   else if(old) m.appendChild(el('div','wkn','以上是 '+seen+' 讀到的進度'));
 }
 
@@ -1156,7 +1170,7 @@ function poll(){
         var nt = st.teach;   // 先取出：DATA 與 st 是同一個物件，下一行會蓋掉 st.teach
         DATA = st; DATA.teach = keep; takeTeach(nt, tep);   // 錄製狀態只經 takeTeach 進來（舊快照、亂序都擋）
         applyCloudChat(ch, true); render(); } }
-    }catch(e){ workObserve(null); }
+    }catch(e){ try{ workObserve(null); }catch(e2){} }   // 進度區出錯也不得讓下一輪輪詢斷掉（設計者 ec1352 T01）
     poll();
   }, (waiting() || hasUnknown()) ? 4000 : (teachLive() ? 5000 : (workLive() ? 10000 : 30000)));   // 錄製／學習中 5 秒、交辦單施工中 10 秒一次，狀態列與進度條才跟得上
 }
