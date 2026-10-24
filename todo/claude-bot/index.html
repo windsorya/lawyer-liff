@@ -256,7 +256,8 @@
 <div id="teach"><div class="sheet" role="dialog" aria-label="教它一項任務">
   <h3>教它一項任務</h3>
   <p>錄下你執行任務的過程。Claude Bot 會學習這些步驟，之後可以自行再次執行。<br>
-    會錄 Mac 上 Chrome 的畫面與點擊（最長 10 分鐘、不錄聲音、不讀密碼欄）；錄製中請不要輸入密碼。</p>
+    會錄 Mac 上 Chrome 的畫面與點擊，也會錄你邊做邊講的話（最長 10 分鐘；聲音只在 Mac 上轉成文字、轉完就刪；不讀密碼欄）。
+    邊做邊說「為什麼這樣做、要挑哪些、遇到什麼情況怎麼辦、幾點做」，它會學得更準；錄製中請不要輸入密碼。</p>
   <textarea id="teachGoal" maxlength="300" placeholder="先說你想要的結果（例：每天早上到臉書，給今天生日的朋友送祝福）"></textarea>
   <div class="row"><button class="no" id="teachNo">取消</button><button class="go" id="teachGo">開始錄製</button></div>
 </div></div>
@@ -791,7 +792,7 @@ function acceptTeach(nt){
   DATA.teach = nt;
 }
 var TEACH_TXT = { start:'準備錄製…Mac 接手後才開始錄（約 20 秒），看到「錄製中」再開始做',
-  recording:'錄製中：請在 Mac 的 Chrome 上做一次，做完按停止', stop:'停止中…', learning:'正在學習你的步驟（幾分鐘），學好會貼在對話裡' };
+  recording:'錄製中（也在錄你講的話）：請在 Mac 的 Chrome 上做一次，邊做邊說明，做完按停止', stop:'停止中…', learning:'正在學習你的步驟（幾分鐘），學好會貼在對話裡' };
 function teachLive(){
   var t = DATA && DATA.teach; if(!t || !TEACH_TXT[t.state]) return null;
   var age = Date.now() - new Date(String(t.at||'').replace(' ','T') + '+08:00').getTime();
