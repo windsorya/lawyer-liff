@@ -205,6 +205,7 @@
   .go:disabled{opacity:.25}
   .go svg{width:20px;height:20px}
   #hd{text-align:center;font-size:12px;color:var(--faint);margin:0 0 6px;min-height:16px}
+  #hd.warn{color:var(--warn);cursor:pointer}
   .dock.hide{display:none}
   .cn{display:none;text-align:center;font-size:12px;color:var(--warn);margin:0 0 6px}
   .cn.on{display:block}
@@ -281,13 +282,13 @@ function el(tag, cls, text){var e=document.createElement(tag);if(cls)e.className
 function api(params){
   return new Promise(function(res,rej){
     var cb='__cb'+Date.now()+Math.floor(Math.random()*1000);
-    var timer=setTimeout(function(){cleanup();rej(new Error('逾時'));},20000);
+    var timer=setTimeout(function(){cleanup();syncLost('逾時');rej(new Error('逾時'));},20000);
     function cleanup(){clearTimeout(timer);delete window[cb];var s=document.getElementById(cb);if(s)s.parentNode.removeChild(s);}
-    window[cb]=function(r){cleanup();res(r);};
+    window[cb]=function(r){cleanup();syncSeen(r, params.op);res(r);};   // 每個回應都先分類（讀到／登入被拒），呼叫端照舊拿原始回應
     var q=Object.keys(params).map(function(k){return encodeURIComponent(k)+'='+encodeURIComponent(params[k]);}).join('&');
     var s=document.createElement('script');
     s.id=cb;s.src=GAS+'?action=claudebot_api&callback='+cb+'&token='+encodeURIComponent(TOKEN)+'&'+q;
-    s.onerror=function(){cleanup();rej(new Error('連線失敗'));};
+    s.onerror=function(){cleanup();syncLost('連線失敗');rej(new Error('連線失敗'));};
     document.body.appendChild(s);
   });
 }
@@ -469,6 +470,14 @@ var WORK_PHONE_MS = 90*1000;    // 這支手機連續 90 秒讀取失敗（輪�
 var WORK_OLD_MS = 30*1000;      // 上次讀到雲端超過 30 秒（例如打字時輪詢暫停）：註明進度是幾點讀到的
 var WORK_QUIET_S = 8*60;        // 施工中 8 分鐘沒有任何新動作才提醒可能卡住（跑全套測試、等 Codex 審查實測可到 5–6 分鐘）
 function renderWork(m){ var box = el('div'); box.id = 'wkbox'; m.appendChild(box); fillWork(box); }
+/** 第幾次／最多幾次：只有一次機會就不寫；缺哪個欄位就把那個寫成不明（設計者 ec1352 C；Codex 審 47fbc6f：缺欄不得整段消失） */
+function wkTries(x){
+  var t = typeof x.tries === 'number', mx = typeof x.max_tries === 'number';
+  if(mx && x.max_tries <= 1 && (!t || x.tries <= 1)) return '';
+  if(t && mx) return '（第 '+x.tries+'／'+x.max_tries+' 次）';
+  if(t) return '（第 '+x.tries+' 次，上限不明）';
+  return mx ? '（第幾次不明，最多 '+x.max_tries+' 次）' : '（第幾次不明）';
+}
 // 確保容器存在後更新：整頁重畫被跳過（打字中）或還沒建過容器時，直接接在對話最後面（Codex 審 d6bb827）
 function paintWork(){
   if(VIEW !== 'chat') return;
@@ -496,18 +505,19 @@ function fillWork(m){
       // 活動條（不是完成度）：最近有新動作就流動、雲端沒收到回報或久無動作就變灰——一眼分辨施工中還是停了（設計者 ec1352 T09：不得用時間比例冒充完成比例）
       var lively = !stale && typeof x.idle_s === 'number' && x.idle_s + delay < 120;
       bar.style.width = '100%'; bar.className = lively ? 'run' : 'idle';
-      line = '施工中'+(typeof x.tries === 'number' && x.max_tries > 1 ? '（第 '+x.tries+'／'+x.max_tries+' 次）' : '')
-        +'・時間已用 '+(used === null ? '不明' : ago(used*1000))+(typeof x.timeout_min === 'number' ? '（每輪最長 '+x.timeout_min+' 分）' : '');   // 缺欄＝不明，不補假數值（設計者 ec1352 C）
+      line = '施工中'+wkTries(x)
+        +'・時間已用 '+(used === null ? '不明' : ago(used*1000))+(typeof x.timeout_min === 'number' ? '（每輪最長 '+x.timeout_min+' 分）' : '（每輪上限不明）');   // 缺欄＝不明，不補假數值也不默默省略（設計者 ec1352 C）
+      var stepTxt = typeof x.steps === 'number' ? '已做 '+x.steps+' 個動作' : '動作數不明';
       if(x.activity === 'unbound') note = '動作紀錄暫時接不上（看不到做到哪一步，不代表停了）';
       else if(typeof x.idle_s === 'number'){ var q = x.idle_s + delay;
-        note = (typeof x.steps === 'number' ? '已做 '+x.steps+' 個動作' : '動作數不明')+'・最後一個是 '+ago(q*1000)+'前'+(x.doing ? '（'+x.doing+'）' : '');
+        note = stepTxt+'・最後一個是 '+ago(q*1000)+'前'+(x.doing ? '（'+x.doing+'）' : '');
         if(q > WORK_QUIET_S && !stale){ warn = true; note += '。已經 '+ago(q*1000)+'沒有新動作，可能卡住了'; } }
-      else note = '剛開工，還沒看到動作';
+      else note = x.steps === 0 ? '剛開工，還沒看到動作' : stepTxt+'・最後動作時間不明';   // 「剛開工」只在確知 0 個動作時說（Codex 審 47fbc6f：缺 idle_s 不得當成剛開工）
     } else if(x.status === 'queued'){
       bar.style.width = '0%';
       if(typeof x.retry_in_s === 'number'){ var left = x.retry_in_s - delay;
         line = '暫停：'+(x.env_note||'額度用完或連不上網')+'，'+(left > 0 ? '約 '+ago(left*1000)+'後' : '稍後')+'自動再試'; }
-      else line = x.ahead > 0 ? '排隊中：前面還有 '+x.ahead+' 件' : '排隊中：下一件就是它';
+      else line = typeof x.ahead !== 'number' ? '排隊中：前面還有幾件不明' : x.ahead > 0 ? '排隊中：前面還有 '+x.ahead+' 件' : '排隊中：下一件就是它';
     } else {
       bar.style.width = '100%'; bar.className = x.status === 'done' ? 'ok' : 'bad';
       var when = (typeof x.ago_s === 'number') ? ago((x.ago_s + delay)*1000)+'前' : '';
@@ -761,7 +771,7 @@ function header(){
   var st = DATA && DATA.state, pend = 0;
   Object.values((st&&st.rounds)||{}).forEach(function(x){ (x.drafts||[]).forEach(function(d){ if(!d.decision) pend++; }); });
   var at = st && st.pushedAt ? '・巡查結果 '+String(st.pushedAt).slice(5,16).replace('T',' ')+' 更新' : '';
-  document.getElementById('hd').textContent = (st && st.day ? (pend ? pend+' 則待回' : '沒有待回') : '尚無紀錄') + at;
+  HDTXT = (st && st.day ? (pend ? pend+' 則待回' : '沒有待回') : '尚無紀錄') + at; paintSync();
 }
 
 function render(){
@@ -771,7 +781,7 @@ function render(){
   document.getElementById('back').hidden = VIEW!=='tasks';
   document.getElementById('tasks').hidden = VIEW==='tasks';
   document.getElementById('ttl').textContent = VIEW==='tasks' ? '例行任務' : 'Claude Bot';
-  if(!DATA){ m.appendChild(el('div','empty','讀取中…')); return; }
+  if(!DATA){ m.appendChild(el('div','empty', BOOT.msg || '讀取中…')); if(BOOT.msg) document.getElementById('hd').textContent = BOOT.msg; return; }   // 第一次就讀不到：照實說原因與何時重試（設計者 ec1352 T04）
   if(VIEW==='tasks') renderTasks(m); else renderChat(m);
   paintNote(); paintTeach();
 }
@@ -879,8 +889,9 @@ async function load(){
   var r;
   try{ r = await api({op:'state'}); }catch(e){ workObserve(null); throw e; }
   workObserve(r);   // 初次載入也走同一個入口（設計者 ec1352 T04）
-  if(!r.ok){ document.getElementById('hd').textContent=(r.msg==='forbidden'?'只有王律師本人可以看':r.msg||'讀取失敗'); return false; }
-  DATA = r; paintWork();
+  if(!r || !r.ok){ BOOT.msg = r && r.msg === 'forbidden' ? (SYNCST.auth === 'denied' ? '只有王律師本人可以看' : '雲端不認這次登入，正在確認是不是登入過期')
+    : '讀取失敗' + (r && r.msg ? '（'+r.msg+'）' : ''); return false; }   // 不再停在這裡：boot() 照實顯示並自動重試
+  DATA = r; SYNCST.stateMono = mono(); paintWork();
   return true;
 }
 
@@ -1153,35 +1164,147 @@ async function react(id, emoji){
   }catch(err){ var e2 = RXPEND[id]; if(e2 && e2.seq === seq) delete RXPEND[id]; render(); toast('表情沒存成，再試一次'); }
 }
 
-var POLL = null;
+// ── 同步骨架（#4487 律師：「電腦版、手機版都沒辦法實時更新，常常要關掉重開才看得到最新」）──
+// 不變量：前景畫面上的雲端資料，要嘛是最近一輪讀到的，要嘛頁尾明講「幾點之後沒同步、為什麼」，而且自己接回，不靠關掉重開。
+// 關掉重開會做、而舊頁不會做的三件事，這裡都補上：①拿新的登入 token（LINE：token 只有 12 小時，關掉 LIFF 也會撤銷；
+// 過期後雲端回 forbidden，舊頁只是默默不套用）②立刻讀一次（舊頁回到前景要再等最多 30 秒）③第一次讀不到會再讀（舊頁就停了）。
+var SYNCST = {okAt:0, okMono:0, resumeMono:0, stateMono:0, why:'', auth:'', holdWhy:'', busy:false, again:false, lastStart:0};
+var SYNC_STALE_MS = 60*1000;        // 輪詢最慢 30 秒一輪＋讀取逾時 20 秒：前景 60 秒都沒讀到＝真的沒同步
+var SYNC_STATE_EVERY_MS = 30*1000;  // 等回覆時只抓對話；每 30 秒仍讀一次完整狀態（待回草稿、巡查時間、例行任務不會整段凍住）
+var RELOGIN_GAP_MS = 10*60*1000;    // 10 分鐘內自動重新登入過還被拒＝不是 token 過期，停手改由律師點（免得無限跳轉）
+var HDTXT = '', BOOT = {n:0, timer:0, busy:false, msg:''};
+function hms(t){ var d = new Date(t + 8*3600e3); return [d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()].map(function(n){ return ('0'+n).slice(-2); }).join(':'); }
+/** api() 的每個回應都先經過這裡：讀到（state／chat 回 ok）＝同步了；forbidden＝登入出問題，交給 authTrouble。 */
+function syncSeen(r, op){
+  if(r && r.ok === true){ if(op === 'state' || op === 'chat'){ SYNCST.okAt = Date.now(); SYNCST.okMono = mono(); SYNCST.why = ''; SYNCST.auth = ''; SYNCST.holdWhy = ''; paintSync(); } }
+  else if(r && r.ok === false && r.msg === 'forbidden') authTrouble();
+}
+function syncLost(why){ SYNCST.why = why; paintSync(); }
+function syncNote(){
+  var since = Math.max(SYNCST.okMono, SYNCST.resumeMono), seen = SYNCST.okAt ? hms(SYNCST.okAt) : '剛打開時';
+  if(SYNCST.auth === 'expired') return {warn:true, t:'登入過期，正在重新登入…'};
+  if(SYNCST.auth === 'hold') return {warn:true, t:'登入過期，畫面停在 '+seen+'——點這裡重新登入'+(SYNCST.holdWhy ? '（'+SYNCST.holdWhy+'）' : '')};
+  if(SYNCST.auth === 'denied') return {warn:true, t:'雲端不認這次登入，畫面停在 '+seen+'（重試中，點這裡立即重試）'};
+  if(!document.hidden && mono() - since > SYNC_STALE_MS)
+    return {warn:true, t:ago(mono() - since)+'沒同步到雲端'+(SYNCST.why ? '（'+SYNCST.why+'）' : '')+'，畫面停在 '+seen+'，重試中——點這裡立即重試'};
+  return {warn:false, t: SYNCST.okAt ? hms(SYNCST.okAt)+' 已同步' : ''};
+}
+function paintSync(){
+  if(!DATA) return;   // 還沒載入過：頁尾由 boot() 的訊息負責
+  var hd = document.getElementById('hd'), n = syncNote();
+  hd.textContent = HDTXT + (n.t ? (HDTXT ? '・' : '') + (n.warn ? '⚠️ ' : '') + n.t : '');
+  hd.className = n.warn ? 'warn' : '';
+}
+var AUTH_BUSY = false;
+/** 雲端回 forbidden：先看 SDK 手上有沒有新 token；再用 LINE 自己的 getProfile 分辨「token 壞了」（→重新登入）與「token 好的、雲端不認」（→照常重試）。 */
+async function authTrouble(){
+  if(AUTH_BUSY || !window.liff) return; AUTH_BUSY = true;
+  try{
+    var t = null; try{ t = liff.getAccessToken(); }catch(e){}
+    if(t && t !== TOKEN){ TOKEN = t; SYNCST.auth = ''; kick(true); return; }
+    if(SYNCST.auth !== 'expired' && SYNCST.auth !== 'hold'){
+      var bad = true;
+      if(typeof liff.getProfile === 'function'){ try{ await liff.getProfile(); bad = false; }catch(e){} }
+      if(!bad){ SYNCST.auth = 'denied'; if(!DATA){ BOOT.msg = '只有王律師本人可以看'; render(); } paintSync(); return; }
+    }
+    relogin(false);
+  } finally { AUTH_BUSY = false; }
+}
+/** 重新登入＝自動做一次「關掉重開」。有東西還沒送完、正在選字、或 10 分鐘內才重登過，就不自動跳，改在頁尾請律師點。 */
+function relogin(byUser){
+  var last = 0; try{ last = +(localStorage.getItem('cb_relogin_at') || 0); }catch(e){}
+  var why = (ACTIVE || pendingList().length) ? '有訊息還沒送完' : (COMPOSER.asset || COMPOSER.imageJobId) ? '輸入框有圖' : COMPOSING ? '正在選字'
+    : (Date.now() - last < RELOGIN_GAP_MS) ? '剛重新登入過還是被拒' : '';
+  if(!byUser && why){ SYNCST.auth = 'hold'; SYNCST.holdWhy = why; paintSync(); return; }
+  SYNCST.auth = 'expired'; paintSync();
+  var keep = COMPOSER.rawText ? {t:COMPOSER.rawText, q:COMPOSER.quote} : null;
+  if(!keep){ var pm = pendingList()[0]; if(pm) keep = {t:pm.snapshot.rawText, q:pm.snapshot.quote}; }   // 還沒送完的那則：登入回來放回輸入框
+  try{ localStorage.setItem('cb_relogin_at', String(Date.now())); if(keep && keep.t) sessionStorage.setItem('cb_keep', JSON.stringify(keep)); }catch(e){}
+  try{ liff.logout(); }catch(e){}
+  if(typeof liff.isInClient === 'function' && liff.isInClient()) location.reload();   // LINE 內建：liff.init 會自動登入（官方：LIFF 瀏覽器不能呼叫 liff.login）
+  else liff.login({redirectUri: location.origin + location.pathname});                 // 外部瀏覽器：redirectUri 必須以 Endpoint URL（…/lawyer-liff/todo/）開頭
+}
+function keepRestore(){
+  var k = null; try{ k = JSON.parse(sessionStorage.getItem('cb_keep') || 'null'); sessionStorage.removeItem('cb_keep'); }catch(e){}
+  if(!k || !k.t || !composerEmpty()) return;
+  dispatch({type:'input', text:k.t}); if(k.q) dispatch({type:'quote', quote:k.q});
+  toast('重新登入好了，剛才沒送出的字已放回輸入框');
+}
+/** 立刻讀一次（回到前景、網路恢復、點頁尾＝force；視窗拿到焦點＝2 秒內剛讀過就不重複）。正在讀：那一輪若是 2 秒前以前出發的，讀完再補一輪。
+ *  回到前景一律 force：桌機切回分頁時 focus 常先到、剛讀過一次，不能讓它把「回前景立刻讀」吃掉（探針 t67）。 */
+function kick(force){
+  if(!TOKEN) return;
+  if(!DATA){ if(!BOOT.busy){ clearTimeout(BOOT.timer); boot(); } return; }
+  var recent = mono() - SYNCST.lastStart < 2000;
+  if(SYNCST.busy){ if(force && !recent) SYNCST.again = true; return; }
+  if(recent && !force) return;
+  poll(0);
+}
+async function boot(){
+  if(BOOT.busy) return; BOOT.busy = true; clearTimeout(BOOT.timer);
+  var ok = false;
+  try{ ok = await load(); }catch(e){ BOOT.msg = '連不上雲端（'+(e.message||e)+'）'; }
+  BOOT.busy = false;
+  if(ok){ BOOT.msg = ''; BOOT.n = 0; render(); fitQ(); keepRestore(); poll(); if(VIEW==='chat') window.scrollTo(0, document.body.scrollHeight); return; }
+  var d = Math.min(60000, 5000 * Math.pow(2, BOOT.n++));   // 5、10、20、40、60 秒…一直重試，不再停在第一次失敗
+  BOOT.msg = (BOOT.msg || '讀取失敗') + '，' + Math.round(d/1000) + ' 秒後自動重試';
+  render(); BOOT.timer = setTimeout(boot, d);
+}
+
+var POLL = null, POLL_DUE = 0;
+function pollGap(){ try{ return (waiting() || hasUnknown()) ? 4000 : (teachLive() ? 5000 : (workLive() ? 10000 : 30000)); }catch(e){ return 10000; } }   // 錄製／學習中 5 秒、交辦單施工中 10 秒；算間隔出錯也不能讓輪詢鏈斷掉
 function waiting(){ return chat().some(function(x){ return x.role==='me' && x.status==='pending'; }); }
 function editing(){ var a = document.activeElement; return a && a.tagName==='TEXTAREA' && a.id!=='q'; }
 function hasUnknown(){ return msgList().some(function(m){ return m.status === 'unknown'; }); }
 function pendSig(){ return msgList().map(function(m){ return m.mid+':'+m.status; }).join(','); }
 // 輪詢只寫雲端區＋確認收件（找到同 cid 才算收到；沒找到不是拒收）。出發後有送出開始／結束（epoch 變了）或已套用更新的一次 ⇒ 丟掉
-function poll(){
+function poll(delay){
   clearTimeout(POLL);
-  POLL = setTimeout(async function(){
-    if(document.hidden || !TOKEN || ACTIVE){ poll(); return; }
-    var pid = ++SYNC.nextPollId, ep = SYNC.epoch, tep = TEACH_EP;
-    function fresh(){ return pid > SYNC.lastApplied && ep === SYNC.epoch && !ACTIVE; }
-    try{
-      var near = document.body.scrollHeight - (window.scrollY + window.innerHeight) < 200;
-      if(waiting() || hasUnknown()){ var r = await api({op:'chat'}); workObserve(r); if(r.ok && fresh()){ SYNC.lastApplied = pid; var was = JSON.stringify(chat()) + pendSig();
-        applyCloudChat(r.chat, true);
-        if(JSON.stringify(chat()) + pendSig() !== was && !editing()){ render(); if(near) bottom(); } paintNote(); }
-        // 有待回答的訊息時只抓對話；錄製／學習中另讀一次狀態，狀態列才不會卡在「準備錄製」（Codex 審 84b793d P2）
-        if(teachLive()){ var ts = await api({op:'state'}); if(ts.ok){ takeTeach(ts.teach, tep); paintTeach(); } } }
-      else if(editing()){ var sw = await api({op:'state'}); workObserve(sw); }   // 打字中只更新進度區（設計者 ec1352 T07）
-      else { var st = await api({op:'state'}); workObserve(st); if(st.ok && fresh()){ SYNC.lastApplied = pid; var ch = st.chat, keep = DATA && DATA.teach;
-        var nt = st.teach;   // 先取出：DATA 與 st 是同一個物件，下一行會蓋掉 st.teach
-        DATA = st; DATA.teach = keep; takeTeach(nt, tep);   // 錄製狀態只經 takeTeach 進來（舊快照、亂序都擋）
-        applyCloudChat(ch, true); render(); } }
-    }catch(e){ try{ workObserve(null); }catch(e2){} }   // 進度區出錯也不得讓下一輪輪詢斷掉（設計者 ec1352 T01）
-    poll();
-  }, (waiting() || hasUnknown()) ? 4000 : (teachLive() ? 5000 : (workLive() ? 10000 : 30000)));   // 錄製／學習中 5 秒、交辦單施工中 10 秒一次，狀態列與進度條才跟得上
+  var d = typeof delay === 'number' ? delay : pollGap();
+  POLL_DUE = mono() + d;
+  POLL = setTimeout(pollOnce, d);
 }
-document.addEventListener('visibilitychange', function(){ if(!document.hidden){ if(WORK_FAIL_AT) WORK_FAIL_AT = mono(); if(TOKEN) poll(); } });   // 背景期間沒在讀，不算讀不到（設計者 ec1352 T06）
+async function pollOnce(){
+  if(document.hidden || !TOKEN || ACTIVE){ poll(); return; }
+  if(SYNCST.busy && mono() - SYNCST.lastStart < 60000){ SYNCST.again = true; return; }   // 上一輪還在讀：讀完立刻再來一輪，不並行
+  SYNCST.busy = true; SYNCST.lastStart = mono();
+  var pid = ++SYNC.nextPollId, ep = SYNC.epoch, tep = TEACH_EP;
+  function fresh(){ return pid > SYNC.lastApplied && ep === SYNC.epoch && !ACTIVE; }
+  try{
+    var near = document.body.scrollHeight - (window.scrollY + window.innerHeight) < 200;
+    var busyW = waiting() || hasUnknown(), ed = editing(), stateDue = mono() - SYNCST.stateMono > SYNC_STATE_EVERY_MS;
+    if(busyW && (ed || !stateDue)){ var r = await api({op:'chat'}); workObserve(r); if(r.ok && fresh()){ SYNC.lastApplied = pid; var was = JSON.stringify(chat()) + pendSig();
+      applyCloudChat(r.chat, true);
+      if(JSON.stringify(chat()) + pendSig() !== was && !editing()){ render(); if(near) bottom(); } paintNote(); }
+      // 有待回答的訊息時只抓對話；錄製／學習中另讀一次狀態，狀態列才不會卡在「準備錄製」（Codex 審 84b793d P2）；這次讀到的進度也要收（Codex 審 47fbc6f T04）
+      if(teachLive()){ var ts = await api({op:'state'}); workObserve(ts); if(ts.ok){ takeTeach(ts.teach, tep); paintTeach(); } } }
+    else if(ed){ var sw = await api({op:'state'}); workObserve(sw); }   // 打字中只更新進度區（設計者 ec1352 T07）
+    else { var st = await api({op:'state'}); workObserve(st); if(st.ok && fresh()){ SYNC.lastApplied = pid; SYNCST.stateMono = mono(); var ch = st.chat, keep = DATA && DATA.teach;
+      var nt = st.teach;   // 先取出：DATA 與 st 是同一個物件，下一行會蓋掉 st.teach
+      var was2 = JSON.stringify(chat()) + pendSig();
+      DATA = st; DATA.teach = keep; takeTeach(nt, tep);   // 錄製狀態只經 takeTeach 進來（舊快照、亂序都擋）
+      applyCloudChat(ch, true); render();
+      if(near && JSON.stringify(chat()) + pendSig() !== was2) bottom(); } }   // 停在最底下時，新來的訊息要捲進畫面（不然看起來像沒更新）
+  }catch(e){ try{ workObserve(null); }catch(e2){} }   // 進度區出錯也不得讓下一輪輪詢斷掉（設計者 ec1352 T01）
+  SYNCST.busy = false;
+  if(SYNCST.again){ SYNCST.again = false; poll(0); } else poll();
+}
+// 回到前景／bfcache 還原／視窗拿到焦點／網路恢復：立刻讀，不等下一輪（舊頁回前景要再等最多 30 秒，律師就關掉重開了）
+function resumed(){ SYNCST.resumeMono = mono(); if(WORK_FAIL_AT) WORK_FAIL_AT = mono(); kick(true); }   // 背景期間沒在讀，不算讀不到（設計者 ec1352 T06）
+document.addEventListener('visibilitychange', function(){ if(!document.hidden) resumed(); });
+window.addEventListener('pageshow', function(e){ if(e.persisted) resumed(); });
+window.addEventListener('online', resumed);
+window.addEventListener('focus', function(){ kick(); });
+// 看門狗：輪詢鏈不論為何斷掉（某輪丟例外、計時器被系統吃掉），前景時 15 秒內接回；頁尾的「幾點已同步／沒同步多久」也靠它每 5 秒更新
+setInterval(function(){
+  if(document.hidden || !TOKEN || !DATA) return;
+  paintSync();
+  if(SYNCST.busy ? mono() - SYNCST.lastStart > 60000 : mono() > POLL_DUE + 15000){ SYNCST.busy = false; poll(0); }
+}, 5000);
+document.getElementById('hd').onclick = function(){
+  if(SYNCST.auth === 'hold' || SYNCST.auth === 'expired'){ relogin(true); return; }
+  kick(true); toast('同步中…');
+};
 function bottom(){ window.scrollTo({top:document.body.scrollHeight, behavior:'smooth'}); }
 document.getElementById('down').onclick=bottom;
 window.addEventListener('scroll',function(){
@@ -1207,8 +1330,7 @@ document.getElementById('back').onclick=function(){VIEW='chat';history.replaceSt
   TOKEN = liff.getAccessToken();
   if(location.hash==='#tasks') VIEW='tasks';
   render();
-  try{ if(await load()){ render(); fitQ(); poll(); if(VIEW==='chat') window.scrollTo(0, document.body.scrollHeight); } }
-  catch(e){ document.getElementById('hd').textContent=(e.message||String(e)); }
+  boot();   // 第一次讀不到也會自己重試（舊頁在這裡失敗就永遠不輪詢）
 })();
 </script>
 </body>

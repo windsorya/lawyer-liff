@@ -17,7 +17,7 @@ STATE = {"ok": True, "chat": [], "state": {"day": "2026-10-24", "rounds": {}}, "
 FASTPOLL = "(function(){var st=window.setTimeout;window.setTimeout=function(f,d){if(d===4000||d===30000)d=60;return st.call(window,f,d);};})();"
 
 
-async def page_with(handler, ua=None, fast=False, init=None):
+async def page_with(handler, ua=None, fast=False, init=None, liff=None):
     p = await async_playwright().start()
     b = await p.chromium.launch()
     pg = await b.new_page(viewport={"width": 390, "height": 800}, **({"user_agent": ua} if ua else {}))
@@ -30,7 +30,7 @@ async def page_with(handler, ua=None, fast=False, init=None):
     async def route(r):
         u = r.request.url
         if "sdk.js" in u:
-            return await r.fulfill(body=LIFF, content_type="application/javascript")
+            return await r.fulfill(body=liff or LIFF, content_type="application/javascript")
         if u.startswith("https://x.test/"):
             return await r.fulfill(body=HTML, content_type="text/html")
         if u.startswith(GAS):
@@ -1328,9 +1328,225 @@ async def t64():   # 設計者 ec1352 第 1 輪試修審查：①失敗後收到
             and "undefined" not in v2["txt"] and "時間已用 不明" in v2["txt"] and "動作數不明" in v2["txt"]), (v, v2)
 
 
+# ── 同步骨架（#4487：電腦版、手機版都不會即時更新，要關掉重開）＋#4492 剩餘項。每一條都要「舊頁紅、新頁綠」 ──
+def liff_js(profile_ok=False):
+    """可換 token、會記錄 login／logout 的 LIFF 模擬；profile_ok＝LINE 自己認不認這個 token（getProfile）。"""
+    return ("window.__login=[];window.__logout=0;window.__tok=['tok'];"
+            "window.liff={init:()=>Promise.resolve(),isLoggedIn:()=>true,getAccessToken:()=>window.__tok[0],"
+            "login:(o)=>{window.__login.push(o||{});},logout:()=>{window.__logout++;},isInClient:()=>false,"
+            "getProfile:()=>%s};" % ("Promise.resolve({userId:'U1'})" if profile_ok else "Promise.reject(new Error('401'))"))
+
+
+HIDDEN = ("(function(){var h=false;Object.defineProperty(document,'hidden',{configurable:true,get:function(){return h;}});"
+          "Object.defineProperty(document,'visibilityState',{configurable:true,get:function(){return h?'hidden':'visible';}});"
+          "window.__setHidden=function(v){h=v;document.dispatchEvent(new Event('visibilitychange'));};})();")
+NEWBOT = {"id": "b2", "role": "bot", "text": "雲端新來的一則", "at": "2026-10-24T10:05:00"}
+HD = "document.getElementById('hd').innerText"
+
+
+def _cloud(chat=None):
+    """可變的雲端：mode＝ok／forbidden／ABORT；tok_ok＝只有這些 token 雲端認。"""
+    c = {"chat": chat if chat is not None else [dict(BOT)], "mode": "ok", "tok_ok": None, "n": 0}
+
+    async def h(q, log):
+        op = q.get("op")
+        if op in ("state", "chat", "ask"):
+            c["n"] += 1
+            if c["tok_ok"] is not None and q.get("token") not in c["tok_ok"]:
+                return {"ok": False, "msg": "forbidden"}
+            if c["mode"] == "forbidden":
+                return {"ok": False, "msg": "forbidden"}
+            if c["mode"] == "ABORT":
+                return "ABORT"
+        return await base(q, log, chat=c["chat"])
+    return c, h
+
+
+async def t65():   # 雲端回 forbidden、LINE 也不認這個 token（12 小時到期／關掉 LIFF 被撤銷）⇒ 自動重新登入一次；10 分鐘內不重複跳轉
+    c, h = _cloud()
+    p, b, pg, log = await page_with(h, fast=True, liff=liff_js(profile_ok=False))
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(800)
+    c["mode"] = "forbidden"; await pg.wait_for_timeout(1500)
+    v = await pg.evaluate("({login: window.__login, logout: window.__logout, hd: %s})" % HD)
+    forb = sum(1 for x in log if x.get("op") in ("state", "chat")) - 1
+    await done(p, b)
+    return (len(v["login"]) == 1 and v["login"][0].get("redirectUri") == "https://x.test/" and v["logout"] >= 1
+            and "登入過期" in v["hd"] and forb >= 3), (v, forb)
+
+
+async def t66():   # SDK 手上已經有新 token ⇒ 直接換上、立刻重抓，不必跳轉登入
+    c, h = _cloud()
+    p, b, pg, log = await page_with(h, fast=True, liff=liff_js(profile_ok=False))
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(800)
+    c["tok_ok"] = ["tok2"]; c["chat"] = [dict(BOT), dict(NEWBOT)]
+    await pg.evaluate("window.__tok[0] = 'tok2'; 0"); await pg.wait_for_timeout(1200)
+    v = await pg.evaluate("({txt: document.getElementById('main').innerText, login: window.__login.length, tok: TOKEN, hd: %s})" % HD)
+    await done(p, b)
+    return "雲端新來的一則" in v["txt"] and v["login"] == 0 and v["tok"] == "tok2" and "⚠️" not in v["hd"], v
+
+
+async def t67():   # 回到前景立刻讀（舊頁要再等最多 30 秒）——不縮輪詢間隔
+    c, h = _cloud()
+    p, b, pg, log = await page_with(h, init=HIDDEN)
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(800)
+    await pg.evaluate("window.dispatchEvent(new Event('focus')); 0"); await pg.wait_for_timeout(300)   # 桌機切回來時 focus 常先到、剛讀過一次
+    await pg.evaluate("__setHidden(true); 0"); await pg.wait_for_timeout(300)
+    c["chat"] = [dict(BOT), dict(NEWBOT)]
+    await pg.evaluate("__setHidden(false); 0"); await pg.wait_for_timeout(1500)
+    txt = await pg.evaluate("document.getElementById('main').innerText")
+    await done(p, b)
+    return "雲端新來的一則" in txt, txt[-80:]
+
+
+async def t68():   # 第一次讀不到（連線失敗）⇒ 畫面照實說、5 秒後自己重試、之後照常輪詢（舊頁停在錯誤字）
+    c, h = _cloud(); c["mode"] = "ABORT"
+    p, b, pg, log = await page_with(h)
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(800)
+    first = await pg.evaluate("document.getElementById('main').innerText")
+    c["mode"] = "ok"; await pg.wait_for_timeout(5500)
+    v = await pg.evaluate("({txt: document.getElementById('main').innerText, hd: %s})" % HD)
+    await done(p, b)
+    return ("連不上雲端" in first and "自動重試" in first and "好的" in v["txt"] and "已同步" in v["hd"]), (first, v)
+
+
+async def t69():   # 頁尾一直講實話：正常時「幾點已同步」；讀不到超過 60 秒變警示＋原因；點一下立即重試、恢復後警示消失
+    c, h = _cloud()
+    p, b, pg, log = await page_with(h, fast=True)
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(800)
+    ok1 = await pg.evaluate(HD)
+    c["mode"] = "ABORT"; await pg.wait_for_timeout(400)
+    v = await pg.evaluate("() => { SYNCST.okMono = mono() - 120000; SYNCST.resumeMono = SYNCST.okMono; paintSync();"
+                          " return {t: document.getElementById('hd').innerText, c: document.getElementById('hd').className}; }")
+    c["mode"] = "ok"; await pg.click("#hd"); await pg.wait_for_timeout(600)
+    v2 = await pg.evaluate("({t: %s, c: document.getElementById('hd').className})" % HD)
+    await done(p, b)
+    return ("已同步" in ok1 and "沒同步到雲端" in v["t"] and "連線失敗" in v["t"] and v["c"] == "warn"
+            and "已同步" in v2["t"] and v2["c"] == ""), (ok1, v, v2)
+
+
+async def t70():   # 看門狗：輪詢鏈斷掉（計時器沒了）⇒ 15 秒內自己接回
+    c, h = _cloud()
+    p, b, pg, log = await page_with(h)
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(800)
+    before = len(log)
+    await pg.evaluate("clearTimeout(POLL); window.POLL_DUE = mono() - 20000; 0")
+    await pg.wait_for_timeout(6000)
+    after = len(log)
+    await done(p, b)
+    return after > before, (before, after)
+
+
+async def t71():   # 等回覆時（只抓對話）每 30 秒仍讀一次完整狀態：待回草稿、巡查時間不會整段凍住
+    pend = {"id": "mq1", "role": "me", "text": "還在等的題", "status": "pending", "at": "2026-10-24T10:00:00"}
+    c, h = _cloud(chat=[dict(BOT), pend])
+    p, b, pg, log = await page_with(h, fast=True)
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(800)
+    mark = len(log)
+    await pg.evaluate("if (window.SYNCST) SYNCST.stateMono = mono() - 31000; 0"); await pg.wait_for_timeout(800)
+    ops = [x.get("op") for x in log[mark:]]
+    await done(p, b)
+    return "state" in ops and "chat" in ops, ops[:12]
+
+
+async def t72():   # 停在最底下時，輪詢（完整狀態那條）帶來新訊息要捲進畫面——不然看起來像沒更新
+    many = [{"id": "h%d" % i, "role": "bot", "text": "舊訊息 %d" % i, "at": "2026-10-24T09:%02d:00" % (i % 60)} for i in range(40)]
+    c, h = _cloud(chat=many)
+    p, b, pg, log = await page_with(h, fast=True)
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(1200)
+    d0 = await pg.evaluate("document.body.scrollHeight - (scrollY + innerHeight)")
+    c["chat"] = many + [dict(NEWBOT, text="新的一則\n" + "很長的內容\n" * 30)]
+    await pg.wait_for_timeout(2000)
+    d1 = await pg.evaluate("document.body.scrollHeight - (scrollY + innerHeight)")
+    await done(p, b)
+    return d0 < 200 and d1 < 120, (d0, d1)
+
+
+def _tpe_now():
+    import datetime
+    return (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=8)).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+async def t73():   # #4492②：錄製中等回覆時追加讀的 state 也要收進度（Codex 審 47fbc6f T04：chat 缺 work 記失敗、state 帶 seq=11，舊頁停在 seq=10）
+    import time
+    now_ms = int(time.time() * 1000)
+    pend = {"id": "mq1", "role": "me", "text": "還在等的題", "status": "pending", "at": "2026-10-24T10:00:00"}
+    n = {"state": 0}
+
+    async def h(q, log):
+        op = q.get("op")
+        if op == "state":
+            n["state"] += 1
+            r = dict(STATE, chat=[dict(BOT), pend], teach={"sid": "s1", "state": "recording", "at": _tpe_now()})
+            r["work"] = _work(now_ms, seq=10 if n["state"] == 1 else 11)
+            return r
+        if op == "chat":
+            return {"ok": True, "chat": [dict(BOT), pend]}   # 缺 work 欄＝這條讀取不可信
+        return await base(q, log)
+    p, b, pg, log = await page_with(h, fast=True)
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(2500)
+    v = await pg.evaluate("({seq: WORK && WORK.seq, fail: WORK_FAIL_AT, live: !!teachLive()})")
+    await done(p, b)
+    return v["seq"] == 11 and v["fail"] == 0 and v["live"], v
+
+
+async def t74():   # #4492③：缺 tries／max_tries／timeout_min／idle_s／ahead ⇒ 寫「不明」，不省略、不冒充「剛開工／下一件就是它」
+    import time
+    now_ms = int(time.time() * 1000)
+    w = {"at": "x", "rx": now_ms - 5000, "now": now_ms, "seq": now_ms, "items": [
+        {"id": "w1", "text": "缺欄的那張", "status": "running", "elapsed_s": 600, "steps": 12},
+        {"id": "w2", "text": "排隊缺 ahead", "status": "queued"}]}
+    w0 = {"at": "x", "rx": now_ms - 5000, "now": now_ms, "seq": now_ms + 1, "items": [
+        {"id": "w1", "text": "真的剛開工", "status": "running", "tries": 1, "max_tries": 1, "elapsed_s": 5, "steps": 0}]}
+    p, b, pg = await _wk_page(None)
+    t1 = await pg.evaluate("a => { workObserve({ok: true, work: a}); return %s; }" % WK_TXT, w)
+    t2 = await pg.evaluate("a => { workObserve({ok: true, work: a}); return %s; }" % WK_TXT, w0)
+    await done(p, b)
+    ok1 = ("第幾次不明" in t1 and "每輪上限不明" in t1 and "已做 12 個動作・最後動作時間不明" in t1 and "前面還有幾件不明" in t1
+           and "剛開工" not in t1 and "下一件就是它" not in t1)
+    ok2 = "剛開工，還沒看到動作" in t2 and "第幾次" not in t2 and "（每輪上限不明）" in t2
+    return ok1 and ok2, (t1, t2)
+
+
+async def t75():   # 重新登入回來：跳轉前沒送出的字與引用放回輸入框
+    init = "try{sessionStorage.setItem('cb_keep', JSON.stringify({t:'沒送出的字', q:'引用那句'}));}catch(e){}"
+    c, h = _cloud()
+    p, b, pg, log = await page_with(h, init=init)
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(1000)
+    v = await pg.evaluate("({q: document.getElementById('q').value, r: REPLY, left: sessionStorage.getItem('cb_keep')})")
+    await done(p, b)
+    return v["q"] == "沒送出的字" and v["r"] == "引用那句" and v["left"] is None, v
+
+
+async def t76():   # 登入過期但有一則還沒確認收到 ⇒ 不自動跳轉（免得那則不見）；頁尾請律師點，點了才登入、那則的字帶過去
+    c, h = _cloud()
+    p, b, pg, log = await page_with(h, liff=liff_js(profile_ok=False))   # 正常間隔：送出前不會先有一輪輪詢撞到 forbidden
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(800)
+    c["mode"] = "forbidden"
+    await pg.fill("#q", "要送的字"); await pg.click("#send"); await pg.wait_for_timeout(1500)
+    v = await pg.evaluate("({login: window.__login.length, hd: %s, st: UNSENT.map(function(x){return x.state})})" % HD)
+    await pg.click("#hd"); await pg.wait_for_timeout(300)
+    v2 = await pg.evaluate("({login: window.__login.length, keep: sessionStorage.getItem('cb_keep')})")
+    await done(p, b)
+    return (v["login"] == 0 and "點這裡重新登入" in v["hd"] and v2["login"] == 1 and "要送的字" in (v2["keep"] or "")), (v, v2)
+
+
+async def t77():   # LINE 認 token、但雲端回 forbidden（雲端驗證暫時失敗）⇒ 不跳轉、照實標示、照常重試；恢復後警示消失
+    c, h = _cloud()
+    p, b, pg, log = await page_with(h, fast=True, liff=liff_js(profile_ok=True))
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(800)
+    c["mode"] = "forbidden"; await pg.wait_for_timeout(800)
+    v = await pg.evaluate("({login: window.__login.length, hd: %s})" % HD)
+    c["mode"] = "ok"; c["chat"] = [dict(BOT), dict(NEWBOT)]; await pg.wait_for_timeout(800)
+    v2 = await pg.evaluate("({hd: %s, txt: document.getElementById('main').innerText})" % HD)
+    await done(p, b)
+    return (v["login"] == 0 and "雲端不認這次登入" in v["hd"] and "⚠️" not in v2["hd"] and "已同步" in v2["hd"]
+            and "雲端新來的一則" in v2["txt"]), (v, v2)
+
+
 MATRIX = [t01, t02, t03, t04, t05, t06, t07, t08, t09, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20,
           t21, t22, t23, t24, t25, t26, t27, t28, t29, t30, t31, t32, t33, t34, t35, t36, t37,
-          t38, t39, t40, t41, t42, t43, t44, t45, t46, t47, t48, t49, t50, t51, t52, t53, t54, t55, t56, t57, t58, t59, t60, t61, t62, t63, t64]
+          t38, t39, t40, t41, t42, t43, t44, t45, t46, t47, t48, t49, t50, t51, t52, t53, t54, t55, t56, t57, t58, t59, t60, t61, t62, t63, t64,
+          t65, t66, t67, t68, t69, t70, t71, t72, t73, t74, t75, t76, t77]
 EXISTING = [t_cid_reused_after_timeout, t_failure_keeps_new_draft_and_quote, t_stale_poll_does_not_drop_new_message,
             t_teach_menu_keeps_draft, t_teach_record_flow, t_teach_review_84b793d, t_teach_out_of_order, t_teach_stop_response_late, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
             t_fail_after_typing_keeps_draft_and_unsent_full, t_fail_untouched_keeps_whole_message,
