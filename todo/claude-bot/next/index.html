@@ -3,7 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#000000">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<!-- 加到主畫面（#4176）：故意不設 apple-mobile-web-app-capable、manifest 用 display:browser——
+     iPhone 主畫面的全螢幕模式有自己獨立的儲存，LINE 登入在 Safari 完成後 App 讀不到（matcha-pocket PR #3 同型），
+     所以主畫面圖示點開走 Safari，登入狀態與 Safari 共用。 -->
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.json">
+<meta name="apple-mobile-web-app-title" content="Claude Bot">
 <title>Claude Bot</title>
 <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 <style>
