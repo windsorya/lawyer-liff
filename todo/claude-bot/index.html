@@ -449,8 +449,10 @@ function validWork(w){ return !!w && typeof w === 'object' && typeof w.rx === 'n
 function workObserve(r){
   var ok = !!(r && r.ok === true && 'work' in r && (r.work === null ? !WORK : validWork(r.work)));
   if(!ok){ if(!WORK_FAIL_AT) WORK_FAIL_AT = mono(); paintWork(); return; }
-  WORK_OK_AT = Date.now(); WORK_OK_MONO = mono(); WORK_FAIL_AT = 0;
   var w = r.work;
+  // 先比版本再改觀測狀態（設計者 ec1352 T03）：舊版本、同號不同內容＝不可信的回應，不得清除失敗、不得推進讀到時間
+  if(w && WORK && (w.seq < WORK.seq || (w.seq === WORK.seq && JSON.stringify(w.items) !== JSON.stringify(WORK.items)))){ paintWork(); return; }
+  WORK_OK_AT = Date.now(); WORK_OK_MONO = mono(); WORK_FAIL_AT = 0;
   if(w){
     if(w.now > WORK_NOW) WORK_NOW = w.now;
     if(!WORK || w.seq > WORK.seq) WORK = w;
@@ -490,14 +492,15 @@ function fillWork(m){
     c.appendChild(el('div','wkt','「'+x.text+'」'));
     var pb = el('div','pb'), bar = el('i'), line = '', note = '', warn = false;
     if(x.status === 'running'){
-      var used = (x.elapsed_s||0) + delay;
+      var used = typeof x.elapsed_s === 'number' ? x.elapsed_s + delay : null;
       // 活動條（不是完成度）：最近有新動作就流動、雲端沒收到回報或久無動作就變灰——一眼分辨施工中還是停了（設計者 ec1352 T09：不得用時間比例冒充完成比例）
       var lively = !stale && typeof x.idle_s === 'number' && x.idle_s + delay < 120;
       bar.style.width = '100%'; bar.className = lively ? 'run' : 'idle';
-      line = '施工中'+(x.max_tries > 1 ? '（第 '+x.tries+'／'+x.max_tries+' 次）' : '')+'・時間已用 '+ago(used*1000)+'（每輪最長 '+(x.timeout_min||45)+' 分）';
+      line = '施工中'+(typeof x.tries === 'number' && x.max_tries > 1 ? '（第 '+x.tries+'／'+x.max_tries+' 次）' : '')
+        +'・時間已用 '+(used === null ? '不明' : ago(used*1000))+(typeof x.timeout_min === 'number' ? '（每輪最長 '+x.timeout_min+' 分）' : '');   // 缺欄＝不明，不補假數值（設計者 ec1352 C）
       if(x.activity === 'unbound') note = '動作紀錄暫時接不上（看不到做到哪一步，不代表停了）';
       else if(typeof x.idle_s === 'number'){ var q = x.idle_s + delay;
-        note = '已做 '+(x.steps||0)+' 個動作・最後一個是 '+ago(q*1000)+'前'+(x.doing ? '（'+x.doing+'）' : '');
+        note = (typeof x.steps === 'number' ? '已做 '+x.steps+' 個動作' : '動作數不明')+'・最後一個是 '+ago(q*1000)+'前'+(x.doing ? '（'+x.doing+'）' : '');
         if(q > WORK_QUIET_S && !stale){ warn = true; note += '。已經 '+ago(q*1000)+'沒有新動作，可能卡住了'; } }
       else note = '剛開工，還沒看到動作';
     } else if(x.status === 'queued'){
@@ -873,9 +876,11 @@ async function decide(d, decision, copied){
 }
 
 async function load(){
-  var r = await api({op:'state'});
+  var r;
+  try{ r = await api({op:'state'}); }catch(e){ workObserve(null); throw e; }
+  workObserve(r);   // 初次載入也走同一個入口（設計者 ec1352 T04）
   if(!r.ok){ document.getElementById('hd').textContent=(r.msg==='forbidden'?'只有王律師本人可以看':r.msg||'讀取失敗'); return false; }
-  DATA = r; workObserve(r);
+  DATA = r; paintWork();
   return true;
 }
 
@@ -1167,7 +1172,8 @@ function poll(){
         if(JSON.stringify(chat()) + pendSig() !== was && !editing()){ render(); if(near) bottom(); } paintNote(); }
         // 有待回答的訊息時只抓對話；錄製／學習中另讀一次狀態，狀態列才不會卡在「準備錄製」（Codex 審 84b793d P2）
         if(teachLive()){ var ts = await api({op:'state'}); if(ts.ok){ takeTeach(ts.teach, tep); paintTeach(); } } }
-      else if(!editing()){ var st = await api({op:'state'}); workObserve(st); if(st.ok && fresh()){ SYNC.lastApplied = pid; var ch = st.chat, keep = DATA && DATA.teach;
+      else if(editing()){ var sw = await api({op:'state'}); workObserve(sw); }   // 打字中只更新進度區（設計者 ec1352 T07）
+      else { var st = await api({op:'state'}); workObserve(st); if(st.ok && fresh()){ SYNC.lastApplied = pid; var ch = st.chat, keep = DATA && DATA.teach;
         var nt = st.teach;   // 先取出：DATA 與 st 是同一個物件，下一行會蓋掉 st.teach
         DATA = st; DATA.teach = keep; takeTeach(nt, tep);   // 錄製狀態只經 takeTeach 進來（舊快照、亂序都擋）
         applyCloudChat(ch, true); render(); } }
@@ -1175,7 +1181,7 @@ function poll(){
     poll();
   }, (waiting() || hasUnknown()) ? 4000 : (teachLive() ? 5000 : (workLive() ? 10000 : 30000)));   // 錄製／學習中 5 秒、交辦單施工中 10 秒一次，狀態列與進度條才跟得上
 }
-document.addEventListener('visibilitychange', function(){ if(!document.hidden && TOKEN) poll(); });
+document.addEventListener('visibilitychange', function(){ if(!document.hidden){ if(WORK_FAIL_AT) WORK_FAIL_AT = mono(); if(TOKEN) poll(); } });   // 背景期間沒在讀，不算讀不到（設計者 ec1352 T06）
 function bottom(){ window.scrollTo({top:document.body.scrollHeight, behavior:'smooth'}); }
 document.getElementById('down').onclick=bottom;
 window.addEventListener('scroll',function(){

@@ -1303,9 +1303,34 @@ async def t63():   # 設計者 ec1352 T02／T08／T09：欄位型別錯整份拒
             and "結果通知狀態不明" in v["unk"]), v
 
 
+
+async def t64():   # 設計者 ec1352 第 1 輪試修審查：①失敗後收到舊版本不得清除失敗 ②打字中真實輪詢也會建卡 ③缺欄顯示「不明」不補假數值
+    import time
+    now_ms = int(time.time() * 1000)
+    fast = "(function(){var st=window.setTimeout;window.setTimeout=function(f,d){if(d===10000||d===30000)d=80;return st.call(window,f,d);};})();"
+    first = {"n": 0}
+
+    def wf(q):
+        first["n"] += 1
+        return None if first["n"] == 1 else _work(now_ms)   # 頁面剛載入時還沒有任何進度
+    p, b, pg = await _wk_page(wf, init=fast, fast=False)
+    await pg.evaluate("() => { const t = document.createElement('textarea'); t.id = 'probeEdit'; t.value = '打字中'; document.body.appendChild(t); t.focus(); }")
+    await pg.wait_for_timeout(1200)
+    v = await pg.evaluate("({card: %s, ed: editing(), val: document.getElementById('probeEdit').value})" % WK_TXT)
+    old = _work(now_ms, seq=1); partial = _work(now_ms, seq=now_ms + 50)
+    for k in ("tries", "elapsed_s", "steps", "timeout_min"):
+        partial["items"][0].pop(k)
+    v2 = await pg.evaluate("""a => { workObserve(null); const failed = !!WORK_FAIL_AT;
+      workObserve({ok: true, work: a[0]}); const stillFailed = !!WORK_FAIL_AT;
+      workObserve({ok: true, work: a[1]}); return {failed, stillFailed, txt: %s}; }""" % WK_TXT, [old, partial])
+    await done(p, b)
+    return ("交辦單進度" in v["card"] and v["ed"] and v["val"] == "打字中" and v2["failed"] and v2["stillFailed"]
+            and "undefined" not in v2["txt"] and "時間已用 不明" in v2["txt"] and "動作數不明" in v2["txt"]), (v, v2)
+
+
 MATRIX = [t01, t02, t03, t04, t05, t06, t07, t08, t09, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20,
           t21, t22, t23, t24, t25, t26, t27, t28, t29, t30, t31, t32, t33, t34, t35, t36, t37,
-          t38, t39, t40, t41, t42, t43, t44, t45, t46, t47, t48, t49, t50, t51, t52, t53, t54, t55, t56, t57, t58, t59, t60, t61, t62, t63]
+          t38, t39, t40, t41, t42, t43, t44, t45, t46, t47, t48, t49, t50, t51, t52, t53, t54, t55, t56, t57, t58, t59, t60, t61, t62, t63, t64]
 EXISTING = [t_cid_reused_after_timeout, t_failure_keeps_new_draft_and_quote, t_stale_poll_does_not_drop_new_message,
             t_teach_menu_keeps_draft, t_teach_record_flow, t_teach_review_84b793d, t_teach_out_of_order, t_teach_stop_response_late, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
             t_fail_after_typing_keeps_draft_and_unsent_full, t_fail_untouched_keeps_whole_message,
