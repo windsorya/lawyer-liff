@@ -7,89 +7,124 @@
 <title>Claude Bot</title>
 <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
 <style>
-  /* C 方案（2026-10-23 律師定案）：仿 Grok Bot 的對話式版面——黑底、助理說話不加泡泡、草稿卡可直接改字、
-     例行任務像 Grok 的排程清單。這是預覽版（todo/claude-bot/next/），律師點頭才換上 todo/claude-bot/。 */
+  /* C 方案（2026-10-23 律師定案）：仿 Grok Bot 的對話式版面。2026-10-24 律師拿 Grok Bot 手機截圖對照指出「長相完全不同」，
+     改成照他截圖的外觀：跟手機一樣淺色（深色模式自動變深）、浮起來的圓鈕＋置中名稱膠囊、助理每段話放在淺灰大圓角面板、
+     大字、粗體小標＋項目清單、底部膠囊列、捲到最新的圓鈕。這是預覽版（todo/claude-bot/next/），律師點頭才換上 todo/claude-bot/。 */
   :root{
-    --bg:#000; --surface:#151517; --surface2:#1f1f22; --ink:#f5f5f5; --sub:#9a9aa1; --faint:#5c5c63;
-    --line:#26262a; --accent:#e5e5e7; --ok:#4ade80; --warn:#fbbf24;
+    --bg:#ffffff; --panel:#f2f2f4; --card:#ffffff; --field:#f2f2f4; --ink:#111113; --sub:#6e6e76; --faint:#a1a1a8;
+    --line:#e4e4e8; --fab:#ffffff; --shadow:0 2px 12px rgba(0,0,0,.10),0 0 0 1px rgba(0,0,0,.04);
+    --solid:#111113; --on-solid:#ffffff; --ok:#15803d; --warn:#b45309; --brand:#d97757;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#000; --panel:#1c1c1e; --card:#2a2a2d; --field:#2a2a2d; --ink:#f5f5f5; --sub:#a1a1a8; --faint:#6e6e76;
+      --line:#2f2f33; --fab:#1c1c1e; --shadow:0 2px 12px rgba(0,0,0,.5),0 0 0 1px rgba(255,255,255,.06);
+      --solid:#f5f5f5; --on-solid:#000; --ok:#4ade80; --warn:#fbbf24; }
   }
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   html,body{background:var(--bg)}
-  body{margin:0;color:var(--ink);font:16px/1.6 -apple-system,"PingFang TC","Noto Sans TC",sans-serif;
-       -webkit-font-smoothing:antialiased;padding-bottom:env(safe-area-inset-bottom)}
-  .top{position:sticky;top:0;z-index:5;background:#000;border-bottom:1px solid #111;
-       padding:calc(env(safe-area-inset-top) + 10px) 16px 10px;display:grid;grid-template-columns:40px 1fr 40px;align-items:center}
-  .top h1{margin:0;text-align:center;font-size:17px;font-weight:600;letter-spacing:.02em}
-  .top .sub{text-align:center;font-size:12px;color:var(--sub);margin-top:1px}
-  .icon{width:40px;height:40px;border:0;background:none;color:var(--ink);display:grid;place-items:center;border-radius:50%;touch-action:manipulation}
-  .icon:active{background:var(--surface2)}
-  .icon svg{width:22px;height:22px}
-  main{padding:4px 16px 48px;max-width:680px;margin:0 auto}
+  body{margin:0;color:var(--ink);font:19px/1.6 -apple-system,"PingFang TC","Noto Sans TC",sans-serif;
+       -webkit-font-smoothing:antialiased}
+  button{font-family:inherit;color:inherit}
 
-  /* 對話：Claude Bot 說的話不加泡泡（Grok 的助理訊息就是這樣），時間是小灰字 */
-  .turn{margin:22px 0 0}
-  .who{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--sub);margin-bottom:6px}
-  .ava{width:22px;height:22px;border-radius:50%;background:#d97757;display:grid;place-items:center;color:#fff;font-size:12px;font-weight:600}
-  .say{font-size:16px;line-height:1.65}
+  /* 頂部：左右兩顆浮起來的圓鈕、中間名稱膠囊；內容從底下捲過去 */
+  .top{position:fixed;top:0;left:0;right:0;z-index:5;display:flex;align-items:center;justify-content:space-between;
+       padding:calc(env(safe-area-inset-top) + 8px) 16px 14px;
+       background:linear-gradient(var(--bg) 55%, transparent);pointer-events:none}
+  .top > *{pointer-events:auto}
+  .fab{width:52px;height:52px;border-radius:50%;border:0;background:var(--fab);box-shadow:var(--shadow);
+       display:grid;place-items:center;touch-action:manipulation;flex:none}
+  .fab:active{transform:scale(.96)}
+  .fab svg{width:24px;height:24px}
+  .fab[hidden]{visibility:hidden;display:grid}
+  .name{display:flex;align-items:center;gap:10px;height:52px;padding:0 20px 0 12px;border-radius:99px;background:var(--fab);box-shadow:var(--shadow)}
+  .name b{font-size:19px;font-weight:600;letter-spacing:.01em}
+  .logo{width:30px;height:30px;flex:none}
+  main{padding:calc(env(safe-area-inset-top) + 84px) 16px calc(env(safe-area-inset-bottom) + 112px);max-width:680px;margin:0 auto}
+
+  /* 助理的一段話＝一塊淺灰大圓角面板（Grok Bot 截圖的樣子） */
+  .turn{margin:0 0 18px}
+  .when{font-size:13px;color:var(--faint);margin:0 6px 6px}
+  .msg{background:var(--panel);border-radius:24px;padding:16px 18px 18px}
   .say b{font-weight:600}
-  .quiet{color:var(--sub);font-size:14px}
+  .h{font-weight:700;margin:16px 0 6px}
+  ul.bul{margin:0;padding:0 0 0 1.2em}
+  ul.bul li{margin:4px 0}
+  ul.bul li::marker{color:var(--faint)}
 
-  /* 草稿卡：主角。對方原話是引言；草稿可直接改字 */
-  .card{background:var(--surface);border-radius:20px;padding:14px 14px 12px;margin:12px 0 0}
-  .card .to{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
-  .card .to b{font-size:15px;font-weight:600}
-  .card .to span{font-size:12px;color:var(--faint)}
-  .quote{margin:8px 0 10px;padding:2px 0 2px 10px;border-left:3px solid #3a3a40;color:var(--sub);font-size:14px;line-height:1.55}
-  textarea{width:100%;min-height:72px;resize:none;border:1px solid transparent;border-radius:14px;background:var(--surface2);
-           color:var(--ink);font:16px/1.6 inherit;padding:10px 12px;outline:none}
-  textarea:focus{border-color:#4a4a52}
-  .edited{font-size:12px;color:var(--warn);margin-top:4px}
+  /* 草稿：面板裡的白色小卡；對方原話是引言、草稿可直接改字 */
+  .card{background:var(--card);border-radius:18px;padding:14px;margin:10px 0 0}
+  .card .to{font-size:17px;font-weight:600}
+  .quote{margin:6px 0 10px;padding:0 0 0 10px;border-left:3px solid var(--line);color:var(--sub);font-size:16px;line-height:1.55}
+  textarea{width:100%;min-height:64px;resize:none;border:1px solid transparent;border-radius:14px;background:var(--field);
+           color:var(--ink);font-family:inherit;font-size:17px;line-height:1.6;padding:10px 12px;outline:none}
+  textarea:focus{border-color:var(--faint)}
+  .edited{font-size:13px;color:var(--warn);margin-top:4px}
   .acts{display:flex;gap:8px;margin-top:10px}
-  .pill{flex:1;min-height:42px;border-radius:99px;border:0;font:inherit;font-size:15px;font-weight:600;touch-action:manipulation}
-  .pill.main{background:var(--accent);color:#000}
-  .pill.alt{background:var(--surface2);color:var(--ink);flex:0 0 auto;padding:0 18px}
+  .pill{flex:1;min-height:46px;border-radius:99px;border:0;font-size:16px;font-weight:600;touch-action:manipulation}
+  .pill.main{background:var(--solid);color:var(--on-solid)}
+  .pill.alt{background:var(--field);color:var(--ink);flex:0 0 auto;padding:0 18px}
   .pill:active{opacity:.75}
-  .done{display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:14px;color:var(--ok)}
+  .done{display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:15px;color:var(--ok)}
   .done.no{color:var(--sub)}
-  .link{background:none;border:0;color:var(--ink);font:inherit;font-size:14px;text-decoration:underline;text-underline-offset:3px;padding:6px 0}
+  .link{background:none;border:0;font-size:15px;text-decoration:underline;text-underline-offset:3px;padding:6px 0}
 
-  details{margin-top:8px;font-size:14px;color:var(--sub)}
-  summary{cursor:pointer;padding:4px 0;list-style:none}
+  details{margin-top:6px}
+  summary{cursor:pointer;list-style:none;font-weight:700;margin:14px 0 4px}
   summary::-webkit-details-marker{display:none}
-  summary::after{content:" ›";color:var(--faint)}
+  summary::after{content:" ›";color:var(--faint);font-weight:400}
   details[open] summary::after{content:" ⌄"}
-  .chip{display:inline-block;background:var(--surface);border-radius:99px;padding:3px 10px;margin:4px 4px 0 0;font-size:13px;color:var(--ink)}
+  .fold{background:var(--panel);border-radius:24px;padding:4px 18px 10px;margin:0 0 18px;font-size:16px;color:var(--sub)}
+  .fold > summary{font-weight:500;margin:10px 0}
+  .fold .msg{background:var(--card)}
 
-  /* 例行任務：仿 Grok 的排程清單 */
-  .sect{font-size:13px;color:var(--sub);margin:22px 4px 8px}
-  .list{background:var(--surface);border-radius:18px;overflow:hidden}
+  /* 例行任務：排程清單 */
+  .sect{font-size:14px;color:var(--sub);margin:4px 6px 8px}
+  .list{background:var(--panel);border-radius:22px;overflow:hidden;margin-bottom:22px}
   .item{display:flex;align-items:center;gap:12px;padding:14px 16px;border-top:1px solid var(--line)}
   .item:first-child{border-top:0}
   .item .tx{flex:1}
-  .item .tx small{display:block;color:var(--sub);font-size:13px;line-height:1.45}
-  .time{font-variant-numeric:tabular-nums;font-size:22px;font-weight:500;letter-spacing:.01em}
-  .x{border:0;background:var(--surface2);color:var(--sub);width:30px;height:30px;border-radius:50%;font-size:16px}
+  .item .tx small{display:block;color:var(--sub);font-size:14px;line-height:1.45}
+  .time{font-variant-numeric:tabular-nums;font-size:24px;font-weight:500;letter-spacing:.01em}
+  .x{border:0;background:var(--card);color:var(--sub);width:32px;height:32px;border-radius:50%;font-size:17px}
   .add{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--line)}
-  input[type=time]{flex:1;background:var(--surface2);border:0;border-radius:12px;color:var(--ink);font:inherit;font-size:16px;padding:8px 12px}
-  .sw{width:51px;height:31px;border-radius:99px;background:#3a3a3f;position:relative;border:0;flex:none}
-  .sw::after{content:"";position:absolute;top:2px;left:2px;width:27px;height:27px;border-radius:50%;background:#fff;transition:left .18s ease-out}
-  .sw.on{background:var(--ok)} .sw.on::after{left:22px}
-  .foot{font-size:12px;color:var(--faint);margin:14px 4px}
-  .empty{color:var(--sub);text-align:center;padding:48px 0}
-  #toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#f5f5f5;color:#000;
-         padding:9px 16px;border-radius:99px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none;white-space:nowrap}
+  input[type=time]{flex:1;background:var(--card);border:0;border-radius:12px;color:var(--ink);font:inherit;font-size:17px;padding:8px 12px}
+  .sw{width:51px;height:31px;border-radius:99px;background:var(--line);position:relative;border:0;flex:none}
+  .sw::after{content:"";position:absolute;top:2px;left:2px;width:27px;height:27px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.2);transition:left .18s ease-out}
+  .sw.on{background:#34c759} .sw.on::after{left:22px}
+  .foot{font-size:13px;color:var(--faint);margin:10px 6px}
+  .empty{color:var(--sub);text-align:center;padding:40px 0}
+
+  /* 底部：膠囊列（今天的狀態＋重新整理）、捲到最新圓鈕 */
+  .dock{position:fixed;left:0;right:0;bottom:0;z-index:5;padding:14px 16px calc(env(safe-area-inset-bottom) + 12px);
+        background:linear-gradient(transparent, var(--bg) 45%)}
+  .bar{width:100%;max-width:648px;margin:0 auto;display:flex;align-items:center;gap:10px;height:58px;padding:0 7px 0 20px;
+       border:0;border-radius:99px;background:var(--fab);box-shadow:var(--shadow);text-align:left;touch-action:manipulation}
+  .bar #hd{flex:1;font-size:17px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .bar .go{width:44px;height:44px;border-radius:50%;background:var(--solid);color:var(--on-solid);display:grid;place-items:center;flex:none}
+  .bar .go svg{width:20px;height:20px}
+  .down{position:fixed;right:16px;bottom:calc(env(safe-area-inset-bottom) + 86px);z-index:4;width:46px;height:46px;transition:opacity .2s}
+  .down.off{opacity:0;pointer-events:none}
+  #toast{position:fixed;left:50%;bottom:calc(96px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--solid);color:var(--on-solid);
+         padding:9px 16px;border-radius:99px;font-size:15px;opacity:0;transition:opacity .2s;pointer-events:none;white-space:nowrap;z-index:6}
   #toast.on{opacity:1}
 </style>
 </head>
 <body>
 <div class="top">
-  <button class="icon" id="back" aria-label="回對話" style="visibility:hidden">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg></button>
-  <div><h1 id="ttl">Claude Bot</h1><div class="sub" id="hd">讀取中…</div></div>
-  <button class="icon" id="tasks" aria-label="例行任務">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg></button>
+  <button class="fab" id="back" aria-label="回對話" hidden>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+  <div class="name">
+    <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="16" fill="#d97757"/>
+      <g stroke="#fff" stroke-width="2.6" stroke-linecap="round"><path d="M16 7v18M7 16h18M9.6 9.6l12.8 12.8M22.4 9.6L9.6 22.4"/></g></svg>
+    <b id="ttl">Claude Bot</b></div>
+  <button class="fab" id="tasks" aria-label="例行任務">
+    <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
 </div>
 <main id="main"></main>
+<button class="fab down off" id="down" aria-label="捲到最新">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+<div class="dock"><button class="bar" id="bar" aria-label="重新整理"><span id="hd">讀取中…</span>
+  <span class="go"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5"/></svg></span></button></div>
 <div id="toast"></div>
 
 <script>
@@ -143,9 +178,8 @@ function renderRound(m, key, r){
   var drafts = r.drafts || [];
   var opened = r.opened || [];
   var turn = el('div','turn');
-  var who = el('div','who'); who.appendChild(el('span','ava','C'));
-  who.appendChild(el('span',null,'Claude Bot・'+(hm(r.at)||key.replace(/\s.*$/,''))));
-  turn.appendChild(who);
+  turn.appendChild(el('div','when', hm(r.at)||key.replace(/\s.*$/,'')));
+  var box = el('div','msg'); turn.appendChild(box);
   var pending = drafts.filter(function(d){return !d.decision;}).length;
   var say = el('div','say');
   var n = opened.length || r.opened_count || 0;
@@ -158,21 +192,22 @@ function renderRound(m, key, r){
     say.appendChild(document.createTextNode(pending ? '。草稿可以直接改字，按「複製」到 LINE 貼上。' : '。'));
   } else {
     say.textContent = lead + (unfinished ? '，目前還沒有要你回的。' : (n ? '，沒有需要你回的。' : '。'));
-    say.className = unfinished ? 'say' : 'say quiet';   // 沒做完的輪次不能說成「沒有要回的」（Codex 審 b75099a9）
+    say.className = 'say';   // 沒做完的輪次不能說成「沒有要回的」（Codex 審 b75099a9）
   }
-  turn.appendChild(say);
-  drafts.forEach(function(d){ turn.appendChild(draftCard(d)); });
+  box.appendChild(say);
+  if(drafts.length) box.appendChild(el('div','h','要回的訊息'));
+  drafts.forEach(function(d){ box.appendChild(draftCard(d)); });
   if(opened.length){
-    var det = el('details'); det.appendChild(el('summary',null,'點開了哪幾間（'+opened.length+'）'));
-    opened.forEach(function(o){ det.appendChild(el('span','chip',o.name)); });
-    turn.appendChild(det);
+    var det = el('details'); det.appendChild(el('summary',null,'點開的聊天室（'+opened.length+'）'));
+    var ul = el('ul','bul'); opened.forEach(function(o){ ul.appendChild(el('li',null,o.name)); });
+    det.appendChild(ul); box.appendChild(det);
   }
   m.appendChild(turn);
 }
 
 function draftCard(d){
   var c = el('div','card');
-  var to = el('div','to'); to.appendChild(el('b',null,'給 '+d.chat)); c.appendChild(to);
+  c.appendChild(el('div','to','給 '+d.chat));
   if(d.head) c.appendChild(el('div','quote',d.head));
   var ta = el('textarea'); ta.value = EDITS[d.card_id] != null ? EDITS[d.card_id] : (d.draft||'');
   ta.setAttribute('aria-label','回覆草稿（可直接修改）');
@@ -208,11 +243,11 @@ function renderChat(m){
   var quiet = keys.filter(function(k){ return !(st.rounds[k].drafts||[]).length && done(k); });
   var loud = keys.filter(function(k){ return quiet.indexOf(k) < 0; });
   if(quiet.length){
-    var t = el('div','turn'), det = el('details');
+    var det = el('details','fold');
     var seen = quiet.reduce(function(a,k){ return a + ((st.rounds[k].opened||[]).length || st.rounds[k].opened_count || 0); }, 0);
     det.appendChild(el('summary',null,'另外 '+quiet.length+' 輪沒有需要你回的（共看了 '+seen+' 間）'));
     quiet.forEach(function(k){ renderRound(det, k, st.rounds[k]); });
-    t.appendChild(det); m.appendChild(t);
+    m.appendChild(det);
   }
   loud.forEach(function(k){ renderRound(m, k, st.rounds[k]); });
   var pend = 0; keys.forEach(function(k){ (st.rounds[k].drafts||[]).forEach(function(d){ if(!d.decision) pend++; }); });
@@ -268,14 +303,15 @@ function sw(name, label, hint){
 function header(){
   var st = DATA && DATA.state, pend = 0;
   Object.values((st&&st.rounds)||{}).forEach(function(x){ (x.drafts||[]).forEach(function(d){ if(!d.decision) pend++; }); });
-  document.getElementById('hd').textContent = (st && st.day ? st.day : '尚無紀錄') + (pend ? '・'+pend+' 則待回' : '');
+  var at = st && st.pushedAt ? '・'+String(st.pushedAt).slice(11,16)+' 更新' : '';
+  document.getElementById('hd').textContent = (st && st.day ? (pend ? pend+' 則待回' : '沒有待回') : '尚無紀錄') + at;
 }
 
 function render(){
   var m = document.getElementById('main'); m.textContent='';
   if(DATA) header();   // 待回數每次重繪都重算（Codex 審 b75099a9：按完頁首還寫 1 則待回）
-  document.getElementById('back').style.visibility = VIEW==='tasks' ? 'visible' : 'hidden';
-  document.getElementById('tasks').style.visibility = VIEW==='tasks' ? 'hidden' : 'visible';
+  document.getElementById('back').hidden = VIEW!=='tasks';
+  document.getElementById('tasks').hidden = VIEW==='tasks';
   document.getElementById('ttl').textContent = VIEW==='tasks' ? '例行任務' : 'Claude Bot';
   if(!DATA){ m.appendChild(el('div','empty','讀取中…')); return; }
   if(VIEW==='tasks') renderTasks(m); else renderChat(m);
@@ -313,6 +349,19 @@ async function load(){
   return true;
 }
 
+// 底部膠囊＝重新整理；右下圓鈕＝捲到最新（離底部遠才出現）
+var RELOADING = false;
+document.getElementById('bar').onclick=async function(){
+  if(RELOADING || !TOKEN) return; RELOADING = true; document.getElementById('hd').textContent='更新中…';
+  try{ if(await load()) render(); }catch(e){ toast('連線失敗，請再按一次'); if(DATA) header(); }
+  finally{ RELOADING = false; }
+};
+function bottom(){ window.scrollTo({top:document.body.scrollHeight, behavior:'smooth'}); }
+document.getElementById('down').onclick=bottom;
+window.addEventListener('scroll',function(){
+  var far = document.body.scrollHeight - (window.scrollY + window.innerHeight) > 240;
+  document.getElementById('down').className = 'fab down' + (far ? '' : ' off');
+},{passive:true});
 document.getElementById('tasks').onclick=function(){VIEW='tasks';location.hash='tasks';render();};
 document.getElementById('back').onclick=function(){VIEW='chat';history.replaceState(null,'',location.pathname+location.search);render();};
 
