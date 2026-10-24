@@ -269,6 +269,7 @@ function hm(iso){ return (iso||'').slice(11,16); }
 function renderRound(m, key, r){
   var drafts = r.drafts || [];
   var opened = r.opened || [];
+  var manual = r.manual || [];
   var turn = el('div','turn');
   if(m.tagName === 'DETAILS') turn.appendChild(el('div','when', hm(r.at)||key.replace(/\s.*$/,'')));
   var box = el('div','msg'); turn.appendChild(box);
@@ -283,6 +284,8 @@ function renderRound(m, key, r){
     say.appendChild(document.createTextNode(lead+'，'));
     say.appendChild(el('b',null, pending ? '有 '+pending+' 則要你回' : '要回的都處理好了'));
     say.appendChild(document.createTextNode(pending ? '。草稿可以直接改字按「複製」，或在下面打「1 回了」「2 不用回」。' : '。'));
+  } else if(manual.length){
+    say.textContent = lead + '，有 ' + manual.length + ' 間有新訊息但我開不了，請你手動看。';
   } else {
     say.textContent = lead + (unfinished ? '，目前還沒有要你回的。' : (n ? '，沒有需要你回的。' : '。'));
     say.className = 'say';   // 沒做完的輪次不能說成「沒有要回的」（Codex 審 b75099a9）
@@ -290,6 +293,12 @@ function renderRound(m, key, r){
   box.appendChild(say);
   if(drafts.length) box.appendChild(el('div','h','要回的訊息'));
   drafts.forEach(function(d){ box.appendChild(draftCard(d)); });
+  if(manual.length){   /* 有綠點但開不了（名稱帶 emoji 裝飾、OCR 讀不準）：只給時間＋預覽，不帶聊天室名（#4344） */
+    box.appendChild(el('div','h','有新訊息但開不了，請手動看'));
+    var mu = el('ul','bul');
+    manual.forEach(function(x){ mu.appendChild(el('li',null,(x.label ? x.label+'｜' : '') + (x.preview || '（沒有預覽文字）'))); });
+    box.appendChild(mu);
+  }
   if(opened.length){
     var det = el('details'); det.appendChild(el('summary',null,'點開的聊天室（'+opened.length+'）'));
     var ul = el('ul','bul'); opened.forEach(function(o){ ul.appendChild(el('li',null,o.name)); });
@@ -334,7 +343,7 @@ function renderChat(m){
   if(!Object.keys(st.rounds).length && !chat().length){ if(!pendingList().length) m.appendChild(el('div','empty','今天還沒有跑過')); renderPending(m); return; }
   // 主角是要回的草稿：沒有草稿的輪次併成一行（可展開），有草稿的輪次照時間排在下面
   var keys = Object.keys(st.rounds).sort(function(x,y){ var a=(st.rounds[x].at||'')+x, b=(st.rounds[y].at||'')+y; return a<b?-1:a>b?1:0; })   /* 照執行時間排，過午夜的輪次排在後面 */;
-  function done(k){ var x = st.rounds[k].result; return !x || x === 'done' || x === 'no_unread'; }
+  function done(k){ var x = st.rounds[k].result; return (!x || x === 'done' || x === 'no_unread') && !(st.rounds[k].manual||[]).length; }   /* 有開不了要手動看的列＝要露出來（#4344） */
   // 收合的只有「做完了、又沒有草稿」的輪次；沒做完的一律攤開（Codex 審 d39de488：partial 被藏進收合）
   var quiet = keys.filter(function(k){ return !(st.rounds[k].drafts||[]).length && done(k); });
   var loud = keys.filter(function(k){ return quiet.indexOf(k) < 0; });
