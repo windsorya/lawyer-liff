@@ -187,6 +187,12 @@
   .go svg{width:20px;height:20px}
   #hd{text-align:center;font-size:12px;color:var(--faint);margin:0 0 6px;min-height:16px}
   .dock.hide{display:none}
+  .cn{display:none;text-align:center;font-size:12px;color:var(--warn);margin:0 0 6px}
+  .cn.on{display:block}
+  /* 待處理的那幾則（送出中／沒傳成／收件不明／被拒收）：畫在對話最底下，不混進雲端對話 */
+  .me.pend div{opacity:.7}
+  .pendbox{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;font-size:15px}
+  .pendbox button{border:1px solid var(--line);background:var(--bg);border-radius:99px;padding:6px 12px;font-size:14px;touch-action:manipulation}
   .down{position:fixed;left:calc(50% - 23px);bottom:calc(env(safe-area-inset-bottom) + 86px);z-index:4;width:46px;height:46px;transition:opacity .2s}
   .down.off{opacity:0;pointer-events:none}
   #toast{position:fixed;left:50%;bottom:calc(96px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--solid);color:var(--on-solid);
@@ -209,7 +215,7 @@
 <button class="fab down off" id="down" aria-label="捲到最新">
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
 <div id="menu"><div class="card" id="mcard"></div></div>
-<div class="dock" id="dock"><div id="hd">讀取中…</div>
+<div class="dock" id="dock"><div id="hd">讀取中…</div><div id="cn" class="cn"></div>
   <div class="bar" id="barbox"><div id="rq"><span id="rqt"></span><button class="x" id="rqx" aria-label="取消回覆">×</button></div><div id="ap"><img id="api" alt="要附的圖"><button class="x" id="apx" aria-label="取消附圖">×</button></div><button class="plus" id="plus" aria-label="附加圖片"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button><input type="file" id="file" accept="image/*" hidden><textarea id="q" rows="1" placeholder="傳訊息給 Claude Bot" aria-label="傳訊息給 Claude Bot"></textarea>
   <button class="go" id="send" aria-label="送出" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button></div></div>
 <div id="toast"></div>
@@ -326,7 +332,7 @@ function draftCard(d){
 function renderChat(m){
   // 還沒有巡查輪次時照樣顯示對話（舊版在這裡直接 return，早上 10 點前整串對話都看不到）
   var st = DATA.state && DATA.state.rounds ? DATA.state : {rounds:{}};
-  if(!Object.keys(st.rounds).length && !chat().length){ m.appendChild(el('div','empty','今天還沒有跑過')); return; }
+  if(!Object.keys(st.rounds).length && !chat().length){ if(!pendingList().length) m.appendChild(el('div','empty','今天還沒有跑過')); renderPending(m); return; }
   // 主角是要回的草稿：沒有草稿的輪次併成一行（可展開），有草稿的輪次照時間排在下面
   var keys = Object.keys(st.rounds).sort(function(x,y){ var a=(st.rounds[x].at||'')+x, b=(st.rounds[y].at||'')+y; return a<b?-1:a>b?1:0; })   /* 照執行時間排，過午夜的輪次排在後面 */;
   function done(k){ var x = st.rounds[k].result; return !x || x === 'done' || x === 'no_unread'; }
@@ -350,7 +356,8 @@ function renderChat(m){
     if(it.round) renderRound(m, it.round, st.rounds[it.round]); else renderMsg(m, it.msg);
   });
   var pend = 0; keys.forEach(function(k){ (st.rounds[k].drafts||[]).forEach(function(d){ if(!d.decision) pend++; }); });
-  if(!pend && keys.every(done) && !chat().length) m.appendChild(el('div','empty','目前沒有要你回的'));
+  if(!pend && keys.every(done) && !chat().length && !pendingList().length) m.appendChild(el('div','empty','目前沒有要你回的'));
+  renderPending(m);
 }
 
 /** 置中時間分隔線（Grok Bot：「昨天 下午11:49」）：第一則、換日、或相隔 20 分鐘以上才出現。 */
@@ -368,8 +375,37 @@ function when(at){
   return (d===today ? '今天 ' : d===y ? '昨天 ' : (parseInt(at.slice(5,7),10)+'/'+parseInt(at.slice(8,10),10)+' ')) + t;
 }
 
-var UNSENT = [];   // 沒送成、而輸入區已經打了新內容的那幾則：留在對話裡（長按可複製），不會因輪詢更新而消失（Codex 審 afaf952 P1）
-function chat(){ return ((DATA && DATA.chat) || []).concat(UNSENT); }
+// ── 送出／沒送成的資料模型（設計契約 L20261024022859-f7b518 (C)）──
+// MSGS：mid → 一則送出的定格快照＋每次嘗試紀錄。身分只認 mid／cid，絕不用「文字相同」去猜是不是同一則。
+// status：sending／uploadFailed（還沒發 ask）／unknown（ask 發了但收件不明，可能已收）／rejected（雲端明確拒收）／accepted。
+// DATA.chat 只放雲端對話；待處理的那幾則另外畫在對話底下，不接進 chat()（選項、引用、輪詢都不受它們影響）。
+var MSGS = {}, MSGN = 0, ATTSEQ = 0, ACTIVE = null;
+var SYNC = {epoch:0, nextPollId:0, lastApplied:0};   // epoch：送出開始／結束都 +1，出發早於它的輪詢結果一律丟掉
+function msgList(){ return Object.keys(MSGS).map(function(k){ return MSGS[k]; }).sort(function(a,b){ return a.order-b.order; }); }
+function pendingList(){ return msgList().filter(function(m){ return m.status !== 'accepted' && m.status !== 'new'; }); }
+// 舊名 UNSENT 只剩唯讀檢視（探針與除錯用）；資料本體在 MSGS
+Object.defineProperty(window, 'UNSENT', {get:function(){
+  return pendingList().filter(function(m){ return m.status !== 'sending'; }).map(function(m){ var s = m.snapshot;
+    return {id:m.mid, role:'me', text:s.rawText, quote:s.quote, attObj:s.asset, state:m.status, why:m.why, tries:m.attempts.length, putBack:!!m.putBack}; }); }});
+/** 對話＝雲端；已收件、但最新一次輪詢快照裡還沒出現的那則補成本機回顯（舊／晚到的輪詢不能讓它消失）。 */
+function chat(){
+  var cloud = (DATA && DATA.chat) || [], ids = {};
+  cloud.forEach(function(x){ ids[x.id] = 1; });
+  var echo = msgList().filter(function(m){ return m.status === 'accepted' && !m.seenInCloud && !ids['m'+m.acceptedCid]; })
+    .map(function(m){ var s = m.snapshot; return {id:'m'+m.acceptedCid, role:'me', text:s.wireText, quote:s.quote, att:s.asset?'local':'', at:m.at, status:'pending'}; });
+  return cloud.concat(echo);
+}
+/** 套用雲端對話：只寫雲端區＋確認收件；不碰輸入區、不刪任何本機待處理項目（沒找到≠拒收）。 */
+function applyCloudChat(list, fromPoll){
+  DATA.chat = list || [];
+  var ids = {}; DATA.chat.forEach(function(x){ ids[x.id] = 1; if(x.cid) ids['m'+x.cid] = 1; });
+  msgList().forEach(function(m){
+    var hit = m.attempts.filter(function(a){ return a.askIssued && ids['m'+a.cid]; })[0];
+    if(!hit) return;
+    if(m.status !== 'sending' && m.status !== 'accepted'){ m.status = 'accepted'; m.acceptedCid = hit.cid; }
+    if(fromPoll) m.seenInCloud = true;
+  });
+}
 
 /** 畫面上待回草稿的編號：照輪次時間排，1 起算。律師打「1 回了」時，頁面把這份對照一起送出，本機照它找卡片。 */
 function numberDrafts(){
@@ -392,15 +428,6 @@ function renderMsg(m, x){
     if(x.reaction) b.appendChild(el('span','rx',x.reaction));
     bindMenu(b, {id:x.id, text:x.text, reaction:x.reaction});
     w.appendChild(b); m.appendChild(w);
-    if(x.status === 'unsent'){
-      var u = el('div','turn'), ub = el('div','msg think','⚠️ 這則沒送成（'+(x.why||'')+'）');
-      var back = el('button', null, '放回輸入框'); back.style.marginLeft = '8px';
-      back.onclick = function(){
-        if(Q.value.trim() || ATT){ toast('輸入框還有內容，先送出或清掉再放回'); return; }
-        UNSENT = UNSENT.filter(function(y){ return y !== x; });
-        Q.value = x.text === '（看這張圖）' ? '' : x.text; if(x.attObj) setAtt(x.attObj); setReply(x.quote || null); fitQ(); render();
-      };
-      ub.appendChild(back); u.appendChild(ub); m.appendChild(u); return; }
     if(x.status === 'pending'){
       var t = el('div','turn'), box = el('div','msg think');
       var waited = (Date.now() - Date.parse(String(x.at||'').replace(' ','T')+'+08:00'))/1000;
@@ -427,12 +454,47 @@ function renderMsg(m, x){
   turn.appendChild(box); m.appendChild(turn);
   acts.forEach(function(a){ m.appendChild(el('div','sys', a)); });
   // 選項按鈕（Grok Bot：「要每天自動讀好友貼文嗎？」三個選項）：只在最新一則回答、你還沒回之前出現；點一下＝送出那句
-  var all = (DATA && DATA.chat) || [];   // 只看雲端對話的最後一則（本機「沒送成」接在最後，不能擋掉選項；Codex 審 27f3905）
-  if((x.choices||[]).length && all[all.length-1] === x){
+  if(choicesLive(x)){
     var o = el('div','opts');
-    x.choices.forEach(function(c){ var b = el('button',null,c); b.onclick = function(){ Q.value = c; fitQ(); SEND.onclick(); }; o.appendChild(b); });
+    x.choices.forEach(function(c){ var b = el('button',null,c); b.onclick = function(){ pickChoice(x, c); }; o.appendChild(b); });
     m.appendChild(o);
   }
+}
+
+/** 選項是否仍是「最新一則」：以雲端穩定 id 判斷；沒有針對它的已收（快照未到）／送出中／收件不明的訊息。舊的待處理項目不影響。 */
+function choicesLive(x){
+  var all = (DATA && DATA.chat) || [], last = all[all.length-1];
+  if(!last || last.id !== x.id || last.role === 'me' || !(x.choices||[]).length) return false;
+  return !msgList().some(function(m){ return m.replyAnchorId === x.id &&
+    (m.status === 'sending' || m.status === 'unknown' || (m.status === 'accepted' && !m.seenInCloud)); });
+}
+/** 點選項＝用選項文字建立一則新訊息送出；不寫輸入區。輸入區有任何內容就拒絕（不先改字才發現不能送）。 */
+function pickChoice(x, c){
+  syncDom();
+  if(!choicesLive(x)){ render(); return; }
+  if(ACTIVE || !TOKEN){ toast('上一則還在送，稍等一下'); return; }
+  if(!composerEmpty()){ toast('輸入框還有內容：先送出或清掉，再點選項'); return; }
+  startNew({rawText:c, wireText:c, quote:'', asset:null, refs:refsNow()}, x.id);
+}
+
+/** 待處理的那幾則（送出中／圖沒傳成／收件不明／被拒收）：一則一項（依 mid），全文、引用、原圖都在；可放回、可重試。 */
+var PEND_LABEL = {sending:'傳送中…', uploadFailed:'⚠️ 圖沒傳成，這則還沒送出', unknown:'⚠️ 還不確定有沒有收到（可能已收）', rejected:'⚠️ 雲端沒收這則'};
+function renderPending(m){
+  pendingList().forEach(function(p){
+    var s = p.snapshot;
+    if(s.quote) m.appendChild(el('div','meq','↩ '+s.quote));
+    if(s.asset){ var mi = el('div','meimg'), im = el('img'); im.src = s.asset.url; im.alt = '你附的圖'; mi.appendChild(im); m.appendChild(mi); }
+    var w = el('div','me pend'), b = el('div'); b.textContent = s.rawText;
+    bindMenu(b, {text:s.rawText}); w.appendChild(b); m.appendChild(w);
+    var u = el('div','turn'), ub = el('div','msg think pendbox');
+    ub.appendChild(el('span',null, PEND_LABEL[p.status] + (p.why ? '（'+p.why+'）' : '') + (p.putBack ? '・已放回輸入框' : '')));
+    if(p.status !== 'sending'){
+      var back = el('button', null, '放回輸入框'); back.onclick = function(){ putBack(p); };
+      var again = el('button', null, p.status === 'unknown' ? '重試原訊息' : '重試'); again.onclick = function(){ retry(p); };
+      ub.appendChild(back); ub.appendChild(again);
+    }
+    u.appendChild(ub); m.appendChild(u);
+  });
 }
 
 /** 回答裡的草稿：可改字、複製（Claude Bot 不會自己送 LINE）。 */
@@ -539,6 +601,7 @@ function render(){
   document.getElementById('ttl').textContent = VIEW==='tasks' ? '例行任務' : 'Claude Bot';
   if(!DATA){ m.appendChild(el('div','empty','讀取中…')); return; }
   if(VIEW==='tasks') renderTasks(m); else renderChat(m);
+  paintNote();
 }
 
 async function toggleTask(id){
@@ -584,14 +647,55 @@ async function load(){
 }
 
 // 底部輸入框：送出＝存到 GAS（pending），Mac 上的 Claude 讀到後回答；等回覆時每 4 秒看一次
-var Q = document.getElementById('q'), SEND = document.getElementById('send'), SENDING = false;
-var SEQ = 0, LASTFAIL = null;   // SEQ：本機對話每變一次就 +1，晚到的輪詢結果不得蓋掉（Codex 審 12d3f62）
-function fitQ(){ Q.style.height='auto'; Q.style.height=Math.min(Q.scrollHeight,160)+'px'; SEND.disabled = SENDING || (!Q.value.trim() && !ATT) || !TOKEN; }
+// COMPOSER＝輸入區唯一真實來源，只經 dispatch() 改（打字、換圖、引用、教任務、放回）；DOM 只負責顯示。
+// 送出那刻把內容定格成快照並換上全新空白草稿；成功、失敗、輪詢都沒有輸入區寫入權（不自動回填，Codex 設計 L20261024022859-f7b518）。
+var Q = document.getElementById('q'), SEND = document.getElementById('send'), FILE = document.getElementById('file');
+var LOCALIMG = {}, IMGJOB = 0, COMPOSING = false, TEACH = '教你一項任務：每天 ';
+function freshComposer(){ return {draftId: ++freshComposer.n, rev:0, rawText:'', quote:null, asset:null, imageJobId:0, originMid:null}; }
+freshComposer.n = 0;
+var COMPOSER = freshComposer();
+Object.defineProperty(window, 'ATT', {get:function(){ return COMPOSER.asset; }});     // 舊名留唯讀檢視
+Object.defineProperty(window, 'REPLY', {get:function(){ return COMPOSER.quote; }});
+function composerEmpty(){ var c = COMPOSER; return c.rawText === '' && !c.quote && !c.asset && !c.imageJobId && !COMPOSING; }   // 只有空白字元也算有內容
+function dispatch(ev){
+  var c = COMPOSER;
+  switch(ev.type){
+    case 'input': if(c.rawText === ev.text) return; c.rawText = ev.text; break;
+    case 'quote': c.quote = ev.quote; break;
+    case 'asset': c.asset = ev.asset; c.imageJobId = 0; break;   // 直接設圖／取消圖：進行中的解碼一律作廢
+    case 'imageStart': c.imageJobId = ev.job; break;
+    case 'imageDone': if(c.draftId !== ev.draftId || c.imageJobId !== ev.job) return; c.asset = ev.asset; c.imageJobId = 0; break;
+    case 'imageFail': if(c.draftId !== ev.draftId || c.imageJobId !== ev.job) return; c.imageJobId = 0; break;   // 失敗不清掉原本已備妥的圖
+    case 'teach': if(c.rawText.indexOf(TEACH) !== 0) c.rawText = TEACH + c.rawText.replace(/^\s+/, ''); break;
+    case 'putBack': var s = ev.msg.snapshot; c.rawText = s.rawText; c.quote = s.quote || null; c.asset = s.asset || null; c.originMid = ev.msg.mid; ev.msg.putBack = true; break;
+    case 'reset': COMPOSER = freshComposer(); paintComposer(); return;
+  }
+  c.rev++;
+  if(c.rawText === '' && !c.quote && !c.asset && !c.imageJobId) c.originMid = null;   // 全部清空＝與放回的那則脫鉤
+  paintComposer();
+}
+function paintComposer(){
+  var c = COMPOSER;
+  if(Q.value !== c.rawText) Q.value = c.rawText;
+  document.getElementById('rqt').textContent = c.quote || ''; document.getElementById('rq').className = c.quote ? 'on' : '';
+  Q.placeholder = c.quote ? '回覆…' : '傳訊息給 Claude Bot';
+  var api_ = document.getElementById('api');
+  document.getElementById('ap').className = c.asset ? 'on' : ''; if(c.asset && api_.getAttribute('src') !== c.asset.url) api_.src = c.asset.url;
+  barClass(); paintNote(); sizeQ();
+}
+function paintNote(){
+  var src = COMPOSER.originMid && MSGS[COMPOSER.originMid], cn = document.getElementById('cn');
+  cn.textContent = !src ? '' : src.status === 'accepted' ? '原訊息已收到：原樣不會再送，改過內容才算新的一則'
+    : src.status === 'unknown' ? '原訊息還不確定有沒有收到：原樣送出＝重試同一則；改過的內容要等原訊息確認' : '';
+  cn.className = cn.textContent ? 'cn on' : 'cn';
+}
+function syncDom(){ if(Q.value !== COMPOSER.rawText) dispatch({type:'input', text:Q.value}); }
+function sizeQ(){ Q.style.height='auto'; Q.style.height=Math.min(Q.scrollHeight,160)+'px';
+  SEND.disabled = !!ACTIVE || !!COMPOSER.imageJobId || (!COMPOSER.rawText.trim() && !COMPOSER.asset) || !TOKEN; }
+function fitQ(){ syncDom(); sizeQ(); }
 // 附加圖片（Grok Bot 的 ＋→附加檔案）：先壓成長邊 1600px JPEG，送出時 POST 到 GAS（快取 6 小時），Mac 取走後給工作階段看
-var ATT = null, LOCALIMG = {}, FILE = document.getElementById('file');
-function barClass(){ document.getElementById('barbox').className = 'bar' + (REPLY ? ' quoting' : '') + (ATT ? ' att' : ''); }
-function setAtt(a){ TOUCH++; ATT = a; document.getElementById('ap').className = a ? 'on' : ''; if(a) document.getElementById('api').src = a.url;
-  barClass(); fitQ(); }
+function barClass(){ document.getElementById('barbox').className = 'bar' + (COMPOSER.quote ? ' quoting' : '') + (COMPOSER.asset ? ' att' : ''); }
+function setAtt(a){ dispatch({type:'asset', asset:a ? Object.freeze(a) : null}); }
 var ICON_IMG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/></svg>';
 var ICON_TEACH = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="#dc2626" stroke-width="2"/><circle cx="12" cy="12" r="4" fill="#dc2626"/></svg>';
 // ＋ 選單（Grok Bot 實機：附加檔案／教它一項任務）
@@ -601,8 +705,7 @@ document.getElementById('plus').onclick = function(){
   var a = el('button','it'); a.innerHTML = ICON_IMG; a.appendChild(el('span',null,'附加圖片'));
   a.onclick = function(){ MENU.className=''; FILE.value=''; FILE.click(); };
   var t = el('button','it'); t.innerHTML = ICON_TEACH; t.appendChild(el('span',null,'教它一項任務'));
-  t.onclick = function(){ MENU.className=''; TOUCH++; var pre = '教你一項任務：每天 ';
-    if(Q.value.indexOf(pre) !== 0) Q.value = pre + Q.value.replace(/^\s+/, ''); fitQ(); Q.focus(); Q.setSelectionRange(Q.value.length, Q.value.length);
+  t.onclick = function(){ MENU.className=''; syncDom(); dispatch({type:'teach'}); Q.focus(); Q.setSelectionRange(Q.value.length, Q.value.length);
     toast('寫下幾點做、做什麼、整理成什麼樣子'); };
   MCARD.appendChild(a); MCARD.appendChild(t); MENU.className = 'on';
   MCARD.style.left = Math.max(12, r.left) + 'px'; MCARD.style.top = Math.max(12, r.top - MCARD.offsetHeight - 10) + 'px';
@@ -610,71 +713,114 @@ document.getElementById('plus').onclick = function(){
 document.getElementById('apx').onclick = function(){ setAtt(null); };
 FILE.onchange = function(){
   var f = FILE.files && FILE.files[0]; if(!f) return;
+  var job = ++IMGJOB, draft = COMPOSER.draftId; dispatch({type:'imageStart', job:job});   // 準備中：不能送出、不能放回
   var img = new Image(), u = URL.createObjectURL(f);
   img.onload = function(){
+    URL.revokeObjectURL(u);
+    if(COMPOSER.draftId !== draft || COMPOSER.imageJobId !== job) return;   // 已換圖／取消：晚到的解碼作廢，不蓋掉後選的圖
     var k = Math.min(1, 1600 / Math.max(img.width, img.height)), c = document.createElement('canvas');
     c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
     c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
     var url = c.toDataURL('image/jpeg', 0.8), b64 = url.split(',')[1];
     if(b64.length > 700000){ url = c.toDataURL('image/jpeg', 0.6); b64 = url.split(',')[1]; }
-    if(b64.length > 700000){ toast('圖太大，請截小一點再傳'); return; }
-    setAtt({url:url, b64:b64, mime:'image/jpeg'}); URL.revokeObjectURL(u); Q.focus();
+    if(b64.length > 700000){ dispatch({type:'imageFail', job:job, draftId:draft}); toast('圖太大，請截小一點再傳'); return; }
+    dispatch({type:'imageDone', job:job, draftId:draft, asset:Object.freeze({url:url, b64:b64, mime:'image/jpeg'})}); Q.focus();
   };
-  img.onerror = function(){ toast('這個檔案讀不了，請選圖片'); };
+  img.onerror = function(){ URL.revokeObjectURL(u); dispatch({type:'imageFail', job:job, draftId:draft}); toast('這個檔案讀不了，請選圖片'); };
   img.src = u;
 };
 async function upload(cid, a){
-  var res = await fetch(GAS, {method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'},
-    body: JSON.stringify({action:'claudeBotPush', token:TOKEN, upload:{cid:cid, mime:a.mime, b64:a.b64}})});
-  var r = await res.json();
+  var ctl = window.AbortController ? new AbortController() : null, t = ctl ? setTimeout(function(){ ctl.abort(); }, 45000) : 0;   // 上傳不能無限掛住流程鎖
+  try{
+    var res = await fetch(GAS, {method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, signal: ctl ? ctl.signal : undefined,
+      body: JSON.stringify({action:'claudeBotPush', token:TOKEN, upload:{cid:cid, mime:a.mime, b64:a.b64}})});
+    var r = await res.json();
+  }catch(e){ throw new Error('圖沒傳成（連線）'); }
+  finally{ clearTimeout(t); }
   if(!r.ok) throw new Error(r.msg === 'forbidden' ? '身分驗證失敗' : '圖沒傳成');
   return r.att;
 }
-var TOUCH = 0;   // 輸入區被使用者動過的次數（打字、換圖、改引用、教任務）；不可叫 EDITS——那是草稿修改暫存（Codex 審 ab0695a P1）
-Q.oninput = function(){ TOUCH++; fitQ(); };
-SEND.onclick = async function(){
-  var text = Q.value.trim(); if((!text && !ATT) || SENDING || !DATA) return;
-  if(!text) text = '（看這張圖）';
-  if(text.length > 2000){ toast('太長了（最多 2000 字）'); return; }
-  SENDING = true; SEQ++; fitQ();
-  var quote = REPLY || '', att = ATT;
-  // 同一則（文字、引用、附圖都一樣）上次沒確認送成 ⇒ 沿用同一個 cid：GAS 依 cid 只收第一次，逾時重按不會變兩題（Codex 審 12d3f62 P1）
-  var same = LASTFAIL && LASTFAIL.text === text && LASTFAIL.quote === quote && LASTFAIL.att === att;
-  var cid = same ? LASTFAIL.cid : (Date.now().toString(36) + Math.random().toString(36).slice(2)).replace(/[^a-z0-9]/g,'').slice(0,20);
-  var refs = {}; Object.keys(NUM).forEach(function(c){ refs[NUM[c]] = c; });
-  if(att) LOCALIMG['m'+cid] = att.url;
-  var mine = {id:'m'+cid, role:'me', text:text, quote:quote, att: att ? 'pending' : '', at:new Date(Date.now()+8*3600e3).toISOString().slice(0,19), status:'pending'};
-  UNSENT = UNSENT.filter(function(x){ return !(x.text === text && x.quote === quote && (x.attObj ? x.attObj.b64 : '') === (att ? att.b64 : '')); });   // 重送同一則（含同一張圖）：舊的「沒送成」拿掉
-  DATA.chat = (DATA.chat || []).filter(function(x){ return x.id !== mine.id; }).concat([mine]); Q.value=''; setAtt(null); fitQ(); render(); bottom();
-  var edits0 = TOUCH;   // 之後有任何輸入、換圖、改引用都會 +1（刪光重打也算動過；Codex 審 27f3905）
-  try{
-    var attId = att ? await upload(cid, att) : '';
-    var r = await api({op:'ask', text:text, cid:cid, refs:JSON.stringify(refs), quote:quote, att:attId});
-    if(!r.ok){ var hard = r.msg === 'too long' || r.msg === 'full'; throw Object.assign(new Error(r.msg==='too long'?'太長了':r.msg==='full'?'還有太多題沒回完，等 Claude Bot 回完再傳':r.msg||'沒送成'), {hard:hard}); }
-    LASTFAIL = null; SEQ++;
-    if(REPLY === (quote || null)) setReply(null);   // 送出期間他改選了別的引用就留著
-    DATA.chat = r.chat; render(); bottom(); poll();
-  }catch(e){
-    // 雲端明確拒收（太長／滿了）＝確定沒收，下次換新 cid；逾時／連線失敗＝可能已收，下次同一則沿用 cid
-    LASTFAIL = e.hard ? null : {cid:cid, text:text, quote:quote, att:att};
-    SEQ++;
-    DATA.chat = (DATA.chat || []).filter(function(x){ return x !== mine; });
-    // 輸入區在送出後完全沒動過（沒打字、沒換圖、引用沒改）才整則原封還原；動過就一個欄位都不碰（Codex 審 afaf952：
-    // 失敗把舊圖接到新字上、復活已取消的引用），沒送成的那則留在對話裡、內容完整可複製
-    var untouched = TOUCH === edits0;
-    var why = String(e.message || e);
-    if(untouched){ Q.value = text === '（看這張圖）' ? '' : text; if(att) setAtt(att); }
-    else { if(att) LOCALIMG['u'+cid] = att.url;
-      UNSENT.push({id:'u'+cid, role:'me', text:text, quote:quote, att: att ? 'local' : '', attObj: att || null, status:'unsent', why:why, at:mine.at}); }
-    render(); fitQ();
-    toast('沒送成：'+why+(untouched ? '，再按一次' : '（你剛打的新內容保留著；沒送成的那則留在對話裡）'));
-  }finally{ SENDING = false; fitQ(); }
+Q.oninput = function(){ if(!COMPOSING) dispatch({type:'input', text:Q.value}); else sizeQ(); };
+Q.addEventListener('compositionstart', function(){ COMPOSING = true; sizeQ(); });
+Q.addEventListener('compositionend', function(){ COMPOSING = false; syncDom(); sizeQ(); });
+
+function newCid(){ return (Date.now().toString(36) + Math.random().toString(36).slice(2)).replace(/[^a-z0-9]/g,'').slice(0,20); }
+function refsNow(){ var refs = {}; Object.keys(NUM).forEach(function(c){ refs[NUM[c]] = c; }); return refs; }   // 送出那刻的「第幾則」對照，重試照用不重算
+function anchorNow(){ var all = (DATA && DATA.chat) || [], last = all[all.length-1]; return last && last.role !== 'me' ? last.id : null; }
+function startNew(snap, anchor){
+  var mid = 'l' + (++MSGN);
+  MSGS[mid] = {mid:mid, snapshot:Object.freeze(snap), attempts:[], status:'new', why:'', replyAnchorId:anchor, order:MSGN,
+               at:new Date(Date.now()+8*3600e3).toISOString().slice(0,19)};
+  return runAttempt(MSGS[mid], newCid(), '');
+}
+/** 重試同一則（mid 不變）：收件不明／圖沒傳成＝沿用原 cid 與已上傳的附件，重放原快照；確定拒收＝新 cid。 */
+function retry(m){
+  if(ACTIVE || !TOKEN){ toast('上一則還在送，稍等一下'); return false; }
+  if(!m || m.status === 'accepted' || m.status === 'sending' || !m.attempts.length) return false;
+  var last = m.attempts[m.attempts.length-1], reuse = m.status !== 'rejected', attId = '';
+  if(reuse) m.attempts.forEach(function(a){ if(a.cid === last.cid && a.attId) attId = a.attId; });
+  runAttempt(m, reuse ? last.cid : newCid(), attId);
+  return true;
+}
+function putBack(m){
+  syncDom();
+  if(ACTIVE){ toast('上一則還在送，稍等再放回'); return; }
+  if(!composerEmpty()){ toast('輸入框還有內容，先送出或清掉再放回'); return; }
+  dispatch({type:'putBack', msg:m}); render(); Q.focus();
+}
+SEND.onclick = function(){
+  syncDom();
+  var c = COMPOSER;
+  if(!TOKEN || !DATA || ACTIVE || COMPOSING) return;
+  if(c.imageJobId){ toast('圖還在處理，稍等一下'); return; }
+  var wire = c.rawText.trim(); if(!wire && !c.asset) return;
+  if(!wire) wire = '（看這張圖）';
+  if(wire.length > 2000){ toast('太長了（最多 2000 字）'); return; }   // 沒過前端檢查：不建立任何送出紀錄，原文留著
+  var src = c.originMid && MSGS[c.originMid];
+  if(src){
+    var same = src.snapshot.rawText === c.rawText && (src.snapshot.quote || null) === (c.quote || null) && src.snapshot.asset === c.asset;
+    if(src.status === 'sending') return;
+    if(same && src.status === 'accepted'){ toast('原訊息已經收到了，不會再送一次'); return; }
+    if(!same && src.status === 'unknown'){ toast('原訊息還不確定有沒有收到：先按它的「重試原訊息」，確認後再送改過的內容'); return; }
+    if(same){ dispatch({type:'reset'}); retry(src); return; }   // 放回後原樣再送＝同一則的重試（cid 規則見 retry）
+  }
+  var snap = {rawText:c.rawText, wireText:wire, quote:c.quote || '', asset:c.asset, refs:refsNow()}, anchor = anchorNow();
+  dispatch({type:'reset'});   // 文字、圖、引用一起清空，換上全新草稿；之後輸入區只屬於使用者
+  startNew(snap, anchor);
 };
+async function runAttempt(m, cid, attId){
+  var a = {attemptId: ++ATTSEQ, cid:cid, phase:'upload', askIssued:false, attId:attId || '', outcome:null};
+  m.attempts.push(a); m.status = 'sending'; m.why = ''; ACTIVE = a.attemptId; SYNC.epoch++;   // 第一個 await 前就上鎖
+  render(); sizeQ(); bottom();
+  var s = m.snapshot;
+  function settle(outcome, why){
+    a.outcome = outcome;
+    if(m.status === 'accepted') return;   // 已確認收件不會被降回
+    var earlierUnknown = m.attempts.some(function(b){ return b !== a && b.outcome === 'unknown'; });
+    if(earlierUnknown && outcome !== 'unknown'){ m.status = 'unknown'; m.why = (outcome === 'rejected' ? '重試被拒：' : '重試沒傳成：') + why + '；先前那次可能已收到'; return; }
+    m.status = outcome; m.why = why;
+  }
+  try{
+    if(s.asset && !a.attId) a.attId = await upload(cid, s.asset);
+    a.phase = 'ask'; a.askIssued = true;
+    if(s.asset) LOCALIMG['m'+cid] = s.asset.url;
+    var r = await api({op:'ask', text:s.wireText, cid:cid, refs:JSON.stringify(s.refs), quote:s.quote, att:a.attId});
+    if(r.ok){ a.outcome = 'accepted'; m.status = 'accepted'; m.acceptedCid = cid; m.why = ''; if(r.chat) applyCloudChat(r.chat, false); }
+    else if(r.msg === 'too long' || r.msg === 'full'){ settle('rejected', r.msg === 'too long' ? '太長了' : '還有太多題沒回完，等 Claude Bot 回完再傳'); }
+    else settle('unknown', r.msg || '沒送成');
+  }catch(e){ settle(a.askIssued ? 'unknown' : 'uploadFailed', String(e.message || e)); }
+  finally{
+    if(ACTIVE === a.attemptId){ ACTIVE = null; SYNC.epoch++; }   // 只有自己這次嘗試能解鎖
+    render(); sizeQ();
+    if(m.status === 'accepted') bottom();
+    else toast(m.status === 'rejected' ? '沒送成：'+m.why+'（那則留在下面，可放回或重試）'
+      : m.status === 'uploadFailed' ? '圖沒傳成，這則還沒送出（留在下面，可重試）' : '還不確定有沒有收到（'+m.why+'）；那則留在下面，可按「重試原訊息」');
+    poll();
+  }
+}
 // 兩指點擊（電腦＝右鍵 contextmenu）／長按 0.5 秒（手機）→ 選單
-var REPLY = null, MENU = document.getElementById('menu'), MCARD = document.getElementById('mcard');
-function setReply(t){ TOUCH++; REPLY = t ? t.replace(/\s+/g,' ').trim().slice(0,200) : null;
-  document.getElementById('rqt').textContent = REPLY || ''; document.getElementById('rq').className = REPLY ? 'on' : '';
-  barClass(); Q.placeholder = REPLY ? '回覆…' : '傳訊息給 Claude Bot'; if(REPLY) Q.focus(); }
+var MENU = document.getElementById('menu'), MCARD = document.getElementById('mcard');
+function setReply(t){ dispatch({type:'quote', quote: t ? t.replace(/\s+/g,' ').trim().slice(0,200) : null}); if(COMPOSER.quote) Q.focus(); }
 document.getElementById('rqx').onclick = function(){ setReply(null); };
 MENU.addEventListener('click', function(e){ if(e.target === MENU) MENU.className=''; });
 MENU.addEventListener('contextmenu', function(e){ e.preventDefault(); MENU.className=''; });
@@ -740,18 +886,24 @@ async function react(id, emoji){
 var POLL = null;
 function waiting(){ return chat().some(function(x){ return x.role==='me' && x.status==='pending'; }); }
 function editing(){ var a = document.activeElement; return a && a.tagName==='TEXTAREA' && a.id!=='q'; }
+function hasUnknown(){ return msgList().some(function(m){ return m.status === 'unknown'; }); }
+function pendSig(){ return msgList().map(function(m){ return m.mid+':'+m.status; }).join(','); }
+// 輪詢只寫雲端區＋確認收件（找到同 cid 才算收到；沒找到不是拒收）。出發後有送出開始／結束（epoch 變了）或已套用更新的一次 ⇒ 丟掉
 function poll(){
   clearTimeout(POLL);
   POLL = setTimeout(async function(){
-    if(document.hidden || !TOKEN || SENDING){ poll(); return; }
+    if(document.hidden || !TOKEN || ACTIVE){ poll(); return; }
+    var pid = ++SYNC.nextPollId, ep = SYNC.epoch;
+    function fresh(){ return pid > SYNC.lastApplied && ep === SYNC.epoch && !ACTIVE; }
     try{
-      var near = document.body.scrollHeight - (window.scrollY + window.innerHeight) < 200, s0 = SEQ;
-      if(waiting()){ var r = await api({op:'chat'}); if(r.ok && s0 === SEQ && !SENDING){ var was = JSON.stringify(chat()); DATA.chat = r.chat;
-        if(JSON.stringify(r.chat) !== was && !editing()){ render(); if(near) bottom(); } } }
-      else if(!editing()){ var st = await api({op:'state'}); if(st.ok && s0 === SEQ && !SENDING){ DATA = st; render(); } }
+      var near = document.body.scrollHeight - (window.scrollY + window.innerHeight) < 200;
+      if(waiting() || hasUnknown()){ var r = await api({op:'chat'}); if(r.ok && fresh()){ SYNC.lastApplied = pid; var was = JSON.stringify(chat()) + pendSig();
+        applyCloudChat(r.chat, true);
+        if(JSON.stringify(chat()) + pendSig() !== was && !editing()){ render(); if(near) bottom(); } paintNote(); } }
+      else if(!editing()){ var st = await api({op:'state'}); if(st.ok && fresh()){ SYNC.lastApplied = pid; var ch = st.chat; DATA = st; applyCloudChat(ch, true); render(); } }
     }catch(e){}
     poll();
-  }, waiting() ? 4000 : 30000);
+  }, (waiting() || hasUnknown()) ? 4000 : 30000);
 }
 document.addEventListener('visibilitychange', function(){ if(!document.hidden && TOKEN) poll(); });
 function bottom(){ window.scrollTo({top:document.body.scrollHeight, behavior:'smooth'}); }
@@ -773,7 +925,7 @@ document.getElementById('back').onclick=function(){VIEW='chat';history.replaceSt
     bar.id = 'inapp';   // 固定在頂欄正下方、層級高於頂欄（Codex 審 ab0695a：放在頁首會被固定頂欄蓋住）
     bar.style.cssText = 'position:fixed;left:12px;right:12px;top:' + (topH + 6) + 'px;z-index:6;padding:8px 12px;border-radius:12px;'
       + 'background:var(--card,#fff);color:inherit;box-shadow:0 2px 10px rgba(0,0,0,.12);font-size:14px';
-    var go = el('a', null, '改用 Safari 開'); go.href = location.origin + location.pathname + '?openExternalBrowser=1'; go.style.marginLeft = '6px';
+    var go = el('a', null, '改用 Safari 開'); go.href = location.origin + location.pathname + '?openExternalBrowser=1'; go.style.cssText = 'margin-left:6px;display:inline-block;white-space:nowrap';   // 不折行：折成兩行時點中間會點到提示框本身（探針 t37）
     bar.appendChild(go); document.body.insertBefore(bar, document.body.firstChild);
   }
   TOKEN = liff.getAccessToken();
