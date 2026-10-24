@@ -277,9 +277,21 @@ function load(){
   });
 }
 
+// LINE 電腦版內建視窗開 liff.line.me 時 liff.init() 會掛住不回（10-24 律師實測卡在「載入中…」；官方文件沒寫電腦版行為，
+// init 失敗會被下面的 catch 接住，所以這一型是「既不成功也不失敗」）。12 秒還沒好就照實講、給直接用瀏覽器開的連結。
+var INIT_WAIT_MS = 12000;   // cap-why: 手機 LIFF 實測 init 1–3 秒；12 秒遠超正常值才判卡住
+function initStuck(){
+  var st = new URLSearchParams(location.search).get('liff.state') || '';
+  var sub = /^\/?claude-bot\/?/.test(st) ? 'claude-bot/' : '';
+  var url = 'https://windsorya.github.io/lawyer-liff/todo/' + sub;
+  var hd = document.getElementById('hd'); hd.textContent = '⚠️ LINE 電腦版載入不了這個頁面（LIFF 初始化沒有回應）。請改用瀏覽器開：';
+  var a = document.createElement('a'); a.href = url; a.target = '_blank'; a.rel = 'noopener'; a.textContent = url; hd.appendChild(a);
+}
 (async function(){
+  var timer = setTimeout(initStuck, INIT_WAIT_MS);
   try{ await liff.init({liffId:LIFF_ID}); }
-  catch(e){ document.getElementById('hd').textContent='⚠️ LIFF 初始化失敗：'+(e.message||e); return; }
+  catch(e){ clearTimeout(timer); document.getElementById('hd').textContent='⚠️ LIFF 初始化失敗：'+(e.message||e); return; }
+  clearTimeout(timer);
   if(!liff.isLoggedIn()){ liff.login(); return; }
   TOKEN = liff.getAccessToken();
   try{ await load(); renderGrid(); deepLink(); }
