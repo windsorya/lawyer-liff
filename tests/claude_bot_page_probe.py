@@ -1072,93 +1072,99 @@ async def t50():   # 電腦（有滑鼠）上泡泡文字可直接拖曳選取�
     return v["hover"] and v["us"] != "none", v
 
 
-def _work(now_ms, rx_ago=10_000, run_last_ago=30_000):
-    return {"at": _iso_ago(rx_ago, now_ms), "rx": now_ms - rx_ago, "now": now_ms, "items": [
+def _work(now_ms, rx_ago=10_000, idle_s=30, seq=None):
+    return {"at": "x", "rx": now_ms - rx_ago, "now": now_ms, "seq": seq or (now_ms - rx_ago), "items": [
         {"id": "w1", "text": "希望能有進度條", "status": "running", "tries": 1, "max_tries": 2, "timeout_min": 45,
-         "started_at": _iso_ago(600_000, now_ms), "steps": 12, "last_act": _iso_ago(run_last_ago, now_ms), "doing": "跑指令（測試／檢查）"},
+         "elapsed_s": 600, "steps": 12, "idle_s": idle_s, "doing": "跑指令（測試／檢查）"},
         {"id": "w2", "text": "補齊選取文字", "status": "queued", "tries": 0, "max_tries": 2, "timeout_min": 45, "ahead": 1},
         {"id": "w3", "text": "斷網那張", "status": "queued", "tries": 1, "max_tries": 2, "timeout_min": 45, "ahead": 2,
-         "retry_at": "2026-10-25T00:30:00+08:00", "env_note": "額度用完或連不上網"}]}
+         "retry_in_s": 900, "env_note": "額度用完或連不上網"}]}
 
 
-async def t51():   # 進度卡：施工中（步數、最後動作、在做什麼）、排隊第幾、斷網何時再試；Mac 有在回報就不警告
-    import time
-    now_ms = int(time.time() * 1000)
+def _done_work(now_ms, posted=True, seq=None):
+    return {"at": "x", "rx": now_ms, "now": now_ms, "seq": seq or now_ms, "items": [{"id": "w1", "text": "希望能有進度條", "status": "done",
+            "tries": 1, "max_tries": 2, "timeout_min": 45, "ago_s": 0, "notice_posted": posted}]}
+
+
+WK_TXT = "(document.getElementById('wkbox')||{innerText:''}).innerText"
+
+
+async def _wk_page(work_for_state=None, init=None, fast=True):
     async def h(q, log):
         r = await base(q, log, chat=[dict(BOT)])
-        r["work"] = _work(now_ms)
+        if work_for_state is not None and q.get("op") in ("state", "chat"):
+            r["work"] = work_for_state(q)
         return r
-    p, b, pg, log, ups = await mk(h, fast=True)
+    p, b, pg, log, ups = await mk(h, fast=fast, init=init)
     await pg.wait_for_timeout(500)
+    return p, b, pg
+
+
+async def t51():   # 進度卡：施工中（第幾次、時間已用、動作數、最後動作、在做什麼）、排隊第幾、斷網約多久再試；雲端有收到就不警告
+    import time
+    now_ms = int(time.time() * 1000)
+    p, b, pg = await _wk_page(lambda q: _work(now_ms))
     txt = await pg.evaluate("[...document.querySelectorAll('.wk')].map(e => e.innerText).join('\\n---\\n')")
     w = await pg.evaluate("[...document.querySelectorAll('.wk .pb i')].map(e => e.style.width)")
     await done(p, b)
-    ok = ("施工中（第 1／2 次）" in txt and "已做 12 步" in txt and "跑指令" in txt and "前面還有 1 件" in txt
-          and "00:30 自動再試" in txt and "沒有回報" not in txt and "可能卡住" not in txt and txt.count("交辦單進度") == 3
-          and w[0] not in ("", "0%") and w[1] == "0%")
+    ok = ("施工中（第 1／2 次）・時間已用 10 分鐘" in txt and "已做 12 個動作・最後一個是 40 秒前" in txt and "跑指令" in txt
+          and "前面還有 1 件" in txt and "約 15 分鐘後自動再試" in txt and "沒收到" not in txt and "可能卡住" not in txt
+          and txt.count("交辦單進度") == 3 and w[0] not in ("", "0%") and w[1] == "0%")
     return ok, (txt, w)
 
 
-async def t52():   # Mac 5 分鐘沒回報 ⇒ 卡片明講「Mac 沒有回報」；施工中 10 分鐘沒動作 ⇒「可能卡住」
+async def t52():   # 雲端 5 分鐘沒收到 Mac 回報 ⇒ 明講（且不另判卡住）；雲端有收到但 10 分鐘沒動作 ⇒「可能卡住」；綁不到 ⇒ 照實說接不上
     import time
     now_ms = int(time.time() * 1000)
-    async def h(q, log):
-        r = await base(q, log, chat=[dict(BOT)])
-        r["work"] = _work(now_ms, rx_ago=300_000, run_last_ago=600_000)
-        return r
-    p, b, pg, log, ups = await mk(h, fast=True)
-    await pg.wait_for_timeout(500)
-    txt = await pg.evaluate("[...document.querySelectorAll('.wk')].map(e => e.innerText).join('\\n')")
+    p, b, pg = await _wk_page()
+    unb = _work(now_ms, seq=now_ms + 2); unb["items"][0].pop("idle_s"); unb["items"][0]["activity"] = "unbound"
+    t = await pg.evaluate("""a => { const out = [];
+      workObserve({ok: true, work: a[0]}); out.push(%s);
+      WORK = null; WORK_NOW = 0; workObserve({ok: true, work: a[1]}); out.push(%s);
+      WORK = null; WORK_NOW = 0; workObserve({ok: true, work: a[2]}); out.push(%s); return out; }""" % (WK_TXT, WK_TXT, WK_TXT),
+        [_work(now_ms, rx_ago=300_000, idle_s=600), _work(now_ms, idle_s=600, seq=now_ms + 1), unb])
     await done(p, b)
-    return "沒有回報進度" in txt and "可能卡住" in txt, txt
+    return ("沒收到 Mac 的回報" in t[0] and "可能卡住" not in t[0] and "可能卡住" in t[1] and "沒收到" not in t[1]
+            and "動作紀錄暫時接不上" in t[2] and "已做" not in t[2]), t
 
 
-async def t53():   # 輪詢帶回新進度就重畫：施工中 → 做完了（有進行中的單時不是 30 秒才看一次）
+async def t53():   # 輪詢帶回新版本就重畫：施工中 → 做完了（有進行中的單時 10 秒一次）
     import time
     now_ms = int(time.time() * 1000)
-    n = {"state": 0}
-    fin = {"at": "x", "rx": now_ms, "now": now_ms, "items": [{"id": "w1", "text": "希望能有進度條", "status": "done",
-           "tries": 1, "max_tries": 2, "timeout_min": 45, "finished_at": _iso_ago(0, now_ms)}]}
-    async def h(q, log):
-        r = await base(q, log, chat=[dict(BOT)])
-        if q.get("op") == "state":
-            n["state"] += 1
-            r["work"] = _work(now_ms) if n["state"] == 1 else fin
-        return r
+    n = {"c": 0}
+
+    def wf(q):
+        n["c"] += 1
+        return _work(now_ms) if n["c"] == 1 else _done_work(now_ms, seq=now_ms + 5)
     fast10 = "(function(){var st=window.setTimeout;window.setTimeout=function(f,d){if(d===10000)d=80;return st.call(window,f,d);};})();"
-    p, b, pg, log, ups = await mk(h, init=fast10)
+    p, b, pg = await _wk_page(wf, init=fast10, fast=False)
     await pg.wait_for_timeout(1500)
-    txt = await pg.evaluate("[...document.querySelectorAll('.wk')].map(e => e.innerText).join('\\n')")
+    txt = await pg.evaluate(WK_TXT)
     await done(p, b)
-    return "做完了" in txt and "施工中" not in txt and n["state"] >= 2, (txt, n)
+    return "做完了" in txt and "施工中" not in txt and n["c"] >= 2, (txt, n)
 
 
-
-async def t54():   # 舊快照晚到不倒退；同一份快照較晚重收時「Mac 多久沒回報」照算（不歸零）；null 不清掉
+async def t54():   # 舊版本晚到不倒退；同一份較晚重讀時「雲端多久沒收到」照算；work:null 不清掉卡片、算讀取異常
     import time
     now_ms = int(time.time() * 1000)
-    fin = {"at": "x", "rx": now_ms, "now": now_ms, "items": [{"id": "w1", "text": "希望能有進度條", "status": "done",
-           "tries": 1, "max_tries": 2, "timeout_min": 45, "finished_at": _iso_ago(0, now_ms)}]}
-    async def h(q, log):
-        return await base(q, log, chat=[dict(BOT)])
-    p, b, pg, log, ups = await mk(h, fast=True)
-    await pg.wait_for_timeout(300)
-    await pg.evaluate("w => { takeWork(w[0]); takeWork(w[1]); takeWork(null); render(); }", [fin, _work(now_ms - 60_000)])
-    t1 = await pg.evaluate("document.getElementById('wkbox').innerText")
-    run = _work(now_ms)                                   # rx＝now-10 秒
-    later = dict(run, rx=run["rx"], now=now_ms + 300_000)  # 同一份快照、5 分鐘後再讀到
-    await pg.evaluate("w => { WORK = null; WORK_NOW = 0; takeWork(w[0]); takeWork(w[1]); render(); }", [run, later])
-    t2 = await pg.evaluate("document.getElementById('wkbox').innerText")
+    p, b, pg = await _wk_page()
+    run = _work(now_ms)
+    t = await pg.evaluate("""a => { const out = [];
+      workObserve({ok: true, work: a[0]}); workObserve({ok: true, work: a[1]}); out.push(%s);
+      WORK = null; WORK_NOW = 0; workObserve({ok: true, work: a[2]}); workObserve({ok: true, work: a[3]}); out.push(%s);
+      workObserve({ok: true, work: null}); out.push(String(WORK && WORK.items.length) + '|' + String(!!WORK_FAIL_AT)); return out; }""" % (WK_TXT, WK_TXT),
+        [_done_work(now_ms, seq=now_ms + 9), _work(now_ms, seq=now_ms + 1), run, dict(run, now=now_ms + 300_000)])
     await done(p, b)
-    return ("做完了" in t1 and "施工中" not in t1 and "沒有回報進度" in t2), (t1, t2)
+    return "做完了" in t[0] and "施工中" not in t[0] and "沒收到 Mac 的回報" in t[1] and t[2] == "3|true", t
 
 
-async def t55():   # 手機真的讀取失敗 90 秒以上：寫明是手機斷線（不是 Mac）
+async def t55():   # 手機真的讀取失敗 90 秒以上：寫明是手機連不上（不是 Mac）
     import time
     now_ms = int(time.time() * 1000)
     init = ("window.__off=0;(function(){var n=Date.now;Date.now=function(){return n()+window.__off;};"
             "var st=window.setTimeout;window.setTimeout=function(f,d){if(d===10000)d=80;return st.call(window,f,d);};})();")
     dead = {"on": False}
+
     async def h(q, log):
         if dead["on"]:
             return "ABORT"
@@ -1170,29 +1176,71 @@ async def t55():   # 手機真的讀取失敗 90 秒以上：寫明是手機斷�
     await pg.wait_for_timeout(500)
     dead["on"] = True
     await pg.wait_for_timeout(800)
-    await pg.evaluate("window.__off = 4*60*1000; repaintWork();")
-    txt = await pg.evaluate("document.getElementById('wkbox').innerText")
+    await pg.evaluate("window.__off = 4*60*1000; paintWork();")
+    txt = await pg.evaluate(WK_TXT)
     await done(p, b)
-    return "讀不到雲端" in txt and "Mac 已經" not in txt, txt
+    return "讀不到雲端" in txt and "沒收到 Mac" not in txt, txt
 
 
-async def t58():   # 打字中輪詢暫停 4 分鐘：不得誤報手機斷線或 Mac 沒回報；進度區照重畫並註明幾點讀到的
+async def t57():   # 本機排隊太多時送來的降級列「另外還有 N 件」要顯示成一行
+    import time
+    now_ms = int(time.time() * 1000)
+    w = _work(now_ms); w["items"].append({"id": "more", "status": "more", "count": 12})
+    p, b, pg = await _wk_page(lambda q: w)
+    txt = await pg.evaluate(WK_TXT)
+    await done(p, b)
+    return "另外還有 12 件交辦單在排隊" in txt and "undefined" not in txt, txt
+
+
+async def t58():   # 打字中輪詢暫停 4 分鐘：不得誤報手機斷線、Mac 沒回報或卡住；進度區照重畫並註明幾點讀到的
     import time
     now_ms = int(time.time() * 1000)
     init = "window.__off=0;(function(){var n=Date.now;Date.now=function(){return n()+window.__off;};})();"
-    async def h(q, log):
-        r = await base(q, log, chat=[dict(BOT)])
-        if q.get("op") == "state":
-            r["work"] = _work(now_ms)
-        return r
-    p, b, pg, log, ups = await mk(h, init=init)
-    await pg.wait_for_timeout(500)
+    p, b, pg = await _wk_page(lambda q: _work(now_ms), init=init, fast=False)
     await pg.evaluate("""() => { const t = document.createElement('textarea'); t.id = 'probeEdit'; document.body.appendChild(t); t.focus();
-      window.__off = 4*60*1000; repaintWork(); }""")
-    v = await pg.evaluate("({ed: editing(), txt: document.getElementById('wkbox').innerText})")
+      window.__off = 4*60*1000; paintWork(); }""")
+    v = await pg.evaluate("({ed: editing(), txt: %s})" % WK_TXT)
     await done(p, b)
     t = v["txt"]
-    return v["ed"] and "讀到的進度" in t and "讀不到雲端" not in t and "沒有回報" not in t and "可能卡住" not in t, v
+    return v["ed"] and "讀到的進度" in t and "讀不到雲端" not in t and "沒收到" not in t and "可能卡住" not in t, v
+
+
+async def t59():   # 讀取結果分類（設計者 T09）：ok:false、缺 work、壞格式、例外都算讀取異常且保留舊卡；有效空清單才清空並恢復
+    import time
+    now_ms = int(time.time() * 1000)
+    init = "window.__off=0;(function(){var n=Date.now;Date.now=function(){return n()+window.__off;};})();"
+    p, b, pg = await _wk_page(lambda q: _work(now_ms), init=init, fast=False)
+    v = await pg.evaluate("""a => { const out = [];
+      for (const r of [{ok: false, msg: 'forbidden'}, {ok: true}, {ok: true, work: {items: 'x'}}, null]) {
+        WORK_FAIL_AT = 0; workObserve(r); out.push(!!WORK_FAIL_AT && WORK.items.length === 3); }
+      window.__off = 4*60*1000; paintWork(); out.push(%s.includes('讀不到雲端'));
+      workObserve({ok: true, work: a}); out.push(WORK.items.length === 0 && !WORK_FAIL_AT && !%s.includes('交辦單進度'));
+      return out; }""" % (WK_TXT, WK_TXT), {"at": "x", "rx": now_ms + 1, "now": now_ms + 2, "seq": now_ms + 99, "items": []})
+    await done(p, b)
+    return all(v), v
+
+
+async def t60():   # 打字中首次收到進度（設計者 T10）：馬上出卡片；輸入框焦點與內容不變
+    import time
+    now_ms = int(time.time() * 1000)
+    p, b, pg = await _wk_page()
+    v = await pg.evaluate("""w => { const t = document.createElement('textarea'); t.id = 'probeEdit'; t.value = '打到一半'; document.body.appendChild(t); t.focus();
+      const before = !!document.getElementById('wkbox') && document.getElementById('wkbox').innerText;
+      workObserve({ok: true, work: w});
+      return {before: before, after: %s, focus: document.activeElement === t, val: t.value}; }""" % WK_TXT, _work(now_ms))
+    await done(p, b)
+    return (not v["before"]) and "交辦單進度" in v["after"] and v["focus"] and v["val"] == "打到一半", v
+
+
+async def t61():   # 完成與通知分離（設計者 T14）：通知還沒送到就不能說「結果貼在上面」
+    import time
+    now_ms = int(time.time() * 1000)
+    p, b, pg = await _wk_page()
+    t = await pg.evaluate("""a => { workObserve({ok: true, work: a[0]}); const x = %s;
+      workObserve({ok: true, work: a[1]}); return [x, %s]; }""" % (WK_TXT, WK_TXT),
+        [_done_work(now_ms, posted=False, seq=now_ms + 1), _done_work(now_ms, posted=True, seq=now_ms + 2)])
+    await done(p, b)
+    return "結果通知還在送" in t[0] and "貼在上面" not in t[0] and "結果貼在上面" in t[1], t
 
 
 async def t56():   # 跨兩則選字後在第二則按右鍵：交給瀏覽器原生選單（不 preventDefault）
@@ -1210,23 +1258,9 @@ async def t56():   # 跨兩則選字後在第二則按右鍵：交給瀏覽器�
     return v["prevented"] is False and v["menu"] == "", v
 
 
-
-async def t57():   # 本機排隊太多時送來的降級列「另外還有 N 件」要顯示成一行，不是空白卡
-    import time
-    now_ms = int(time.time() * 1000)
-    w = _work(now_ms); w["items"].append({"id": "more", "status": "more", "count": 12})
-    async def h(q, log):
-        r = await base(q, log, chat=[dict(BOT)]); r["work"] = w; return r
-    p, b, pg, log, ups = await mk(h, fast=True)
-    await pg.wait_for_timeout(400)
-    txt = await pg.evaluate("document.getElementById('wkbox').innerText")
-    await done(p, b)
-    return "另外還有 12 件交辦單在排隊" in txt and "undefined" not in txt, txt
-
-
 MATRIX = [t01, t02, t03, t04, t05, t06, t07, t08, t09, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20,
           t21, t22, t23, t24, t25, t26, t27, t28, t29, t30, t31, t32, t33, t34, t35, t36, t37,
-          t38, t39, t40, t41, t42, t43, t44, t45, t46, t47, t48, t49, t50, t51, t52, t53, t54, t55, t56, t57, t58]
+          t38, t39, t40, t41, t42, t43, t44, t45, t46, t47, t48, t49, t50, t51, t52, t53, t54, t55, t56, t57, t58, t59, t60, t61]
 EXISTING = [t_cid_reused_after_timeout, t_failure_keeps_new_draft_and_quote, t_stale_poll_does_not_drop_new_message,
             t_teach_menu_keeps_draft, t_teach_record_flow, t_teach_review_84b793d, t_teach_out_of_order, t_teach_stop_response_late, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
             t_fail_after_typing_keeps_draft_and_unsent_full, t_fail_untouched_keeps_whole_message,
