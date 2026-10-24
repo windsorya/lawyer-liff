@@ -121,6 +121,12 @@
   .think i{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--faint);margin-right:5px;animation:bl 1.2s infinite}
   .think i:nth-child(2){animation-delay:.2s} .think i:nth-child(3){animation-delay:.4s}
   @keyframes bl{0%,80%,100%{opacity:.25}40%{opacity:1}}
+  .opts{display:flex;flex-direction:column;align-items:flex-start;gap:8px;margin:-6px 0 16px}
+  .opts button{border:1px solid var(--line);background:var(--bg);border-radius:99px;padding:9px 16px;font-size:16px;text-align:left;touch-action:manipulation}
+  .opts button:active{background:var(--panel)}
+  .rule{display:flex;align-items:center;gap:12px;padding:12px 16px;border-top:1px solid var(--line);font-size:16px}
+  .rule:first-child{border-top:0}
+  .rule span{flex:1}
   .num{display:inline-grid;place-items:center;min-width:24px;height:24px;border-radius:12px;background:var(--solid);color:var(--on-solid);font-size:13px;font-weight:600;margin-right:8px;padding:0 6px}
 
   /* 底部：輸入框（傳訊息給 Claude Bot）、捲到最新圓鈕 */
@@ -350,6 +356,13 @@ function renderMsg(m, x){
   (x.drafts||[]).forEach(function(d, i){ box.appendChild(replyDraft(d, x.id+'#'+i)); });
   turn.appendChild(box); m.appendChild(turn);
   acts.forEach(function(a){ m.appendChild(el('div','sys', a)); });
+  // 選項按鈕（Grok Bot：「要每天自動讀好友貼文嗎？」三個選項）：只在最新一則回答、你還沒回之前出現；點一下＝送出那句
+  var all = chat();
+  if((x.choices||[]).length && all[all.length-1] === x){
+    var o = el('div','opts');
+    x.choices.forEach(function(c){ var b = el('button',null,c); b.onclick = function(){ Q.value = c; fitQ(); SEND.onclick(); }; o.appendChild(b); });
+    m.appendChild(o);
+  }
 }
 
 /** 回答裡的草稿：可改字、複製（Claude Bot 不會自己送 LINE）。 */
@@ -407,6 +420,17 @@ function renderTasks(m){
   list.appendChild(sw('drafts','擬回覆草稿','跟著每輪巡查・只給你看，不會自動送出'));
   list.appendChild(sw('auto_like','生日、喜事按讚','跟著每輪巡查・點開時當場按讚'));
   m.appendChild(list);
+  // 長期規則：在對話裡說「以後…」記下的，每輪擬稿照做（Grok Bot：說一次就一直照做）
+  m.appendChild(el('div','sect','長期規則（在對話裡說「以後…」就會記下）'));
+  var rl = el('div','list'), rules = (s.rules || []);
+  if(!rules.length) rl.appendChild(el('div','rule', '還沒有。例：在對話裡打「以後草稿開頭不要用名字稱呼」'));
+  rules.forEach(function(r){
+    var row = el('div','rule'); row.appendChild(el('span',null,r));
+    var x = el('button','x','×'); x.setAttribute('aria-label','刪除這條規則');
+    x.onclick = function(){ var cur = (DATA.settings.rules || []).filter(function(v){ return v !== r; }); save('rules', JSON.stringify(cur)); };
+    row.appendChild(x); rl.appendChild(row);
+  });
+  m.appendChild(rl);
   m.appendChild(el('div','foot','案件群、利衝名單、家人、未加白名單的社群一律不點開。設定第 '+(s.rev||0)+' 版'+(s.updatedAt?'・'+s.updatedAt:'')));
 }
 
