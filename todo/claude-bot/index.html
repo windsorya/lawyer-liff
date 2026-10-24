@@ -418,18 +418,32 @@ function renderChat(m){
 }
 
 // ── 交辦單施工進度：本機每 20 秒把交辦單帳本鏡像到 GAS（work）；時間一律用 GAS 的鐘（rx＝收件、now＝讀取），Mac 睡著看得出來 ──
-var WORK = null, WORK_AT = 0;   // WORK_AT：本頁收到 WORK 的本機時刻（兩次輪詢之間把 GAS 的 now 往前推）
-function takeWork(w){ if(w === undefined) return; WORK = w; WORK_AT = Date.now(); }
+var WORK = null, WORK_AT = 0, WORK_OK_AT = 0;   // WORK_AT：收到這份 WORK 的本機時刻（兩次輪詢之間把 GAS 的 now 往前推）；WORK_OK_AT：最後一次讀到雲端
+// 只收比手上新的快照（rx＝GAS 收件時間，單調）：舊回應晚到不倒退；同一份重收不重設時鐘（否則「多久沒回報」會歸零）；null（讀取失敗）不清掉（Codex 審 594c571）
+function takeWork(w){
+  if(w === undefined) return;
+  WORK_OK_AT = Date.now();
+  if(!w || (WORK && !(w.rx > WORK.rx))) return;
+  WORK = w; WORK_AT = Date.now();
+}
 function workItems(){ return (WORK && WORK.items) || []; }
 function workLive(){ return workItems().some(function(x){ return x.status === 'queued' || x.status === 'running'; }); }
 function gasNow(){ return WORK ? WORK.now + (Date.now() - WORK_AT) : Date.now(); }
 function ago(ms){ var s = Math.max(0, Math.round(ms/1000)); return s < 60 ? s+' 秒' : s < 3600 ? Math.round(s/60)+' 分鐘' : Math.floor(s/3600)+' 小時 '+Math.round(s%3600/60)+' 分'; }
 function hm(iso){ var t = Date.parse(iso); if(isNaN(t)) return ''; var d = new Date(t + 8*3600e3); return ('0'+d.getUTCHours()).slice(-2)+':'+('0'+d.getUTCMinutes()).slice(-2); }
 var WORK_STALE_MS = 3*60*1000;   // 本機每 20 秒推、沒變也每分鐘心跳；3 分鐘沒收到＝Mac 沒在回報
+var WORK_PHONE_MS = 90*1000;    // 這支手機 90 秒讀不到雲端（輪詢每 10 秒）＝是手機斷線，不是 Mac 的問題
 var WORK_QUIET_MS = 8*60*1000;   // 施工中 8 分鐘沒有任何新動作才提醒可能卡住（跑全套測試、等 Codex 審查實測可到 5–6 分鐘）
 function renderWork(m){
-  var items = workItems(); if(!items.length) return;
-  var now = gasNow(), stale = now - WORK.rx > WORK_STALE_MS;
+  if(!workItems().length) return;
+  var box = el('div'); box.id = 'wkbox'; fillWork(box); m.appendChild(box);
+}
+// 輪詢失敗時頁面不重畫 ⇒ 卡片上的「幾秒前」會停住；另用計時器只重畫進度區（Codex 審 594c571：斷線後仍顯示「30 秒前」）
+function repaintWork(){ var b = document.getElementById('wkbox'); if(b && !editing()){ b.textContent = ''; fillWork(b); } }
+setInterval(function(){ if(!document.hidden && workItems().length) repaintWork(); }, 15000);
+function fillWork(m){
+  var items = workItems();
+  var now = gasNow(), stale = now - WORK.rx > WORK_STALE_MS, phoneOff = Date.now() - WORK_OK_AT > WORK_PHONE_MS;
   items.forEach(function(x){
     var c = el('div','wk'), h = el('div','wkh');
     h.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>';
@@ -455,7 +469,8 @@ function renderWork(m){
     pb.appendChild(bar); c.appendChild(pb);
     c.appendChild(el('div','wks', line));
     if(note) c.appendChild(el('div','wkn'+(warn ? ' warn' : ''), note));
-    if(stale && (x.status === 'running' || x.status === 'queued'))
+    if(phoneOff) c.appendChild(el('div','wkn warn','這支手機已經 '+ago(Date.now() - WORK_OK_AT)+'讀不到雲端（網路斷了？），上面是 '+hm(new Date(WORK_OK_AT + 0).toISOString())+' 的進度'));
+    else if(stale && (x.status === 'running' || x.status === 'queued'))
       c.appendChild(el('div','wkn warn','Mac 已經 '+ago(now - WORK.rx)+'沒有回報進度（可能闔上或睡眠）；開機後會接著做，這裡也會更新'));
     m.appendChild(c);
   });
@@ -1057,7 +1072,7 @@ function bindMenu(node, info){
   hoverBar(node, info);
   node.addEventListener('contextmenu', function(e){
     var sel = window.getSelection && window.getSelection();
-    if(sel && !sel.isCollapsed && node.contains(sel.anchorNode)) return;   // 已選了一段字：用瀏覽器原生選單複製那一段
+    if(sel && !sel.isCollapsed && sel.rangeCount && sel.getRangeAt(0).intersectsNode(node)) return;   // 選取範圍有碰到這則（含跨則選取）：用瀏覽器原生選單複製
     e.preventDefault(); openMenu(info, e.clientX, e.clientY); });
   var t = null, sx = 0, sy = 0;
   node.addEventListener('touchstart', function(e){

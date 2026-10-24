@@ -1133,9 +1133,66 @@ async def t53():   # 輪詢帶回新進度就重畫：施工中 → 做完了（
     return "做完了" in txt and "施工中" not in txt and n["state"] >= 2, (txt, n)
 
 
+
+async def t54():   # 舊快照晚到不倒退：先收到 done（rx 新），再收到 running（rx 舊）⇒ 仍是做完了；同一份重收不重設「多久沒回報」
+    import time
+    now_ms = int(time.time() * 1000)
+    fin = {"at": "x", "rx": now_ms, "now": now_ms, "items": [{"id": "w1", "text": "希望能有進度條", "status": "done",
+           "tries": 1, "max_tries": 2, "timeout_min": 45, "finished_at": _iso_ago(0, now_ms)}]}
+    old = _work(now_ms - 60_000)
+    async def h(q, log):
+        return await base(q, log, chat=[dict(BOT)])
+    p, b, pg, log, ups = await mk(h, fast=True)
+    await pg.wait_for_timeout(300)
+    await pg.evaluate("w => { takeWork(w[0]); takeWork(w[1]); render(); }", [fin, old])
+    txt = await pg.evaluate("[...document.querySelectorAll('.wk')].map(e => e.innerText).join('\\n')")
+    at1 = await pg.evaluate("WORK_AT")
+    await pg.wait_for_timeout(50)
+    await pg.evaluate("w => takeWork(w)", fin)
+    at2 = await pg.evaluate("WORK_AT")
+    await pg.evaluate("takeWork(null)")
+    keep = await pg.evaluate("WORK && WORK.items.length")
+    await done(p, b)
+    return "做完了" in txt and "施工中" not in txt and at1 == at2 and keep == 1, (txt, at1, at2, keep)
+
+
+async def t55():   # 手機讀不到雲端：計時器重畫進度區，寫明是手機斷線（不是停在「30 秒前」）
+    import time
+    now_ms = int(time.time() * 1000)
+    off = "window.__off=0;(function(){var n=Date.now;Date.now=function(){return n()+window.__off;};})();"
+    async def h(q, log):
+        r = await base(q, log, chat=[dict(BOT)])
+        if q.get("op") == "state" and not getattr(h, "dead", False):
+            r["work"] = _work(now_ms)
+            return r
+        return "ABORT" if getattr(h, "dead", False) else r
+    p, b, pg, log, ups = await mk(h, init=off)
+    await pg.wait_for_timeout(500)
+    h.dead = True
+    await pg.evaluate("window.__off = 4*60*1000; repaintWork();")
+    txt = await pg.evaluate("[...document.querySelectorAll('.wk')].map(e => e.innerText).join('\\n')")
+    await done(p, b)
+    return "讀不到雲端" in txt and "30 秒前" not in txt, txt
+
+
+async def t56():   # 跨兩則選字後在第二則按右鍵：交給瀏覽器原生選單（不 preventDefault）
+    A, B = dict(BOT, id="b1", text="第一則文字"), dict(BOT, id="b2", text="第二則文字", at="2026-10-24T10:01:00")
+    async def h(q, log):
+        return await base(q, log, chat=[A, B])
+    p, b, pg, log, ups = await mk(h, fast=True)
+    await pg.wait_for_timeout(400)
+    v = await pg.evaluate("""() => { const t = [...document.querySelectorAll('.msg .txt')];
+      const r = document.createRange(); r.setStart(t[0].firstChild, 1); r.setEnd(t[1].firstChild, 2);
+      const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+      const e = new MouseEvent('contextmenu', {bubbles: true, cancelable: true}); t[1].dispatchEvent(e);
+      return {prevented: e.defaultPrevented, menu: document.getElementById('menu').className}; }""")
+    await done(p, b)
+    return v["prevented"] is False and v["menu"] == "", v
+
+
 MATRIX = [t01, t02, t03, t04, t05, t06, t07, t08, t09, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20,
           t21, t22, t23, t24, t25, t26, t27, t28, t29, t30, t31, t32, t33, t34, t35, t36, t37,
-          t38, t39, t40, t41, t42, t43, t44, t45, t46, t47, t48, t49, t50, t51, t52, t53]
+          t38, t39, t40, t41, t42, t43, t44, t45, t46, t47, t48, t49, t50, t51, t52, t53, t54, t55, t56]
 EXISTING = [t_cid_reused_after_timeout, t_failure_keeps_new_draft_and_quote, t_stale_poll_does_not_drop_new_message,
             t_teach_menu_keeps_draft, t_teach_record_flow, t_teach_review_84b793d, t_teach_out_of_order, t_teach_stop_response_late, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
             t_fail_after_typing_keeps_draft_and_unsent_full, t_fail_untouched_keeps_whole_message,
