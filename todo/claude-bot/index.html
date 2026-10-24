@@ -900,7 +900,9 @@ async function load(){
   if(!r || !r.ok){ BOOT.msg = r && r.msg === 'forbidden' ? (SYNCST.auth === 'denied' ? '只有王律師本人可以看'
       : SYNCST.auth === 'hold' ? '登入過期——點這一行重新登入' + (SYNCST.holdWhy ? '（'+SYNCST.holdWhy+'）' : '') : '雲端不認這次登入，正在確認是不是登入過期')
     : '讀取失敗' + (r && r.msg ? '（'+r.msg+'）' : ''); return false; }   // 不再停在這裡：boot() 照實顯示並自動重試
-  DATA = r; SYNCST.stateMono = mono(); paintWork();
+  DATA = r; SYNCST.stateMono = mono();
+  applyCloudChat(r.chat, true);   // 第一次讀到就對帳：跳轉帶回的那則若雲端已有它的 cid，當場認成已收到（設計者 task-mvmrnjsp-7kepqi T08）
+  paintWork();
   return true;
 }
 
@@ -1221,32 +1223,102 @@ async function authTrouble(){
   } finally { AUTH_BUSY = false; }
 }
 /** 重新登入＝自動做一次「關掉重開」。有東西還沒送完、正在選字、或 10 分鐘內才重登過，就不自動跳，改在頁尾請律師點。 */
+function holdRelogin(why){
+  SYNCST.auth = 'hold'; SYNCST.holdWhy = why; paintSync();
+  if(!DATA){ BOOT.msg = '登入過期——點這一行重新登入（'+why+'）'; render(); }   // 還沒載入過：主畫面與頁尾直接講要點哪裡（10-25 實站實跑看到停在「正在確認」）
+}
 function relogin(byUser){
   var last = 0; try{ last = +(localStorage.getItem('cb_relogin_at') || 0); }catch(e){}
-  var why = (ACTIVE || pendingList().length) ? '有訊息還沒送完' : (COMPOSER.asset || COMPOSER.imageJobId) ? '輸入框有圖' : COMPOSING ? '正在選字'
-    : (Date.now() - last < RELOGIN_GAP_MS) ? '剛重新登入過還是被拒' : '';
-  if(!byUser && why){ SYNCST.auth = 'hold'; SYNCST.holdWhy = why; paintSync();
-    if(!DATA){ BOOT.msg = '登入過期——點這一行重新登入（'+why+'）'; render(); }   // 還沒載入過：主畫面與頁尾直接講要點哪裡（10-25 實站實跑看到停在「正在確認」）
-    return; }
+  syncDom();
+  // 暫態：沒辦法原樣帶過跳轉（進行中的傳送、解碼中的圖、輸入法組字），手動也不跳；結束後再點（設計者 task-mvmrnjsp-7kepqi）
+  var hard = ACTIVE ? '有一則正在送，送完再點' : COMPOSER.imageJobId ? '圖還在處理，好了再點' : COMPOSING ? '正在選字，選完再點' : '';
+  // 自動重登只在畫面上沒有任何還沒送出的東西時才跳（不在律師打字時把頁面換掉）；有東西就請律師點，點了才暫存帶走
+  var soft = (pendingList().length || !composerEmpty()) ? '畫面上有還沒送出的內容，會一起帶過去' : (Date.now() - last < RELOGIN_GAP_MS) ? '剛重新登入過還是被拒' : '';
+  if(hard){ holdRelogin(hard); if(byUser) toast(hard); return; }
+  if(!byUser && soft){ holdRelogin(soft); return; }
+  if(!carrySave()){ holdRelogin('畫面上的訊息暫存不下，先不跳轉，免得訊息不見'); if(byUser) toast('暫存不下，先不跳轉'); return; }   // 保存不成功就不離開頁面
   SYNCST.auth = 'expired'; paintSync();
-  // 跳轉會清掉頁面上的一切：還沒確認送到的每一則＋輸入框的字全部帶過去，回來放回輸入框（Codex 審 bf84905 P1：原本只帶一份）；圖帶不過去，頁尾已先講
-  // 已「放回輸入框」的那則以輸入框為準（不重複帶）；同一段字只帶一次（Codex 審 f7c7146 P2）
-  var parts = pendingList().filter(function(m){ return m.mid !== COMPOSER.originMid; }).map(function(m){ return m.snapshot.rawText; })
-    .concat([COMPOSER.rawText]).filter(function(t, i, a){ return t && t.trim() && a.indexOf(t) === i; });
-  var q0 = COMPOSER.quote || (pendingList()[0] && pendingList()[0].snapshot.quote) || null;
-  try{ localStorage.setItem('cb_relogin_at', String(Date.now())); if(parts.length) sessionStorage.setItem('cb_keep', JSON.stringify({t:parts.join('\n\n'), q:q0})); }catch(e){}
+  try{ localStorage.setItem('cb_relogin_at', String(Date.now())); }catch(e){}
   try{ liff.logout(); }catch(e){}
   if(typeof liff.isInClient === 'function' && liff.isInClient()) location.reload();   // LINE 內建：liff.init 會自動登入（官方：LIFF 瀏覽器不能呼叫 liff.login）
   else liff.login({redirectUri: location.origin + location.pathname});                 // 外部瀏覽器：redirectUri 必須以 Endpoint URL（…/lawyer-liff/todo/）開頭
 }
-function keepRestore(){
-  var k = null; try{ k = JSON.parse(sessionStorage.getItem('cb_keep') || 'null'); }catch(e){}
-  if(!k || !k.t) return;
-  if(COMPOSING){ setTimeout(keepRestore, 1000); return; }   // 選字中不奪權：選完再放
-  try{ sessionStorage.removeItem('cb_keep'); }catch(e){}   // 確定放得回去才刪（Codex 審 bf84905 P1：先刪後判斷＝載入前打了字就把舊稿丟了）
-  var cur = COMPOSER.rawText;
-  dispatch({type:'input', text: cur.trim() ? k.t + '\n\n' + cur : k.t}); if(k.q && !COMPOSER.quote) dispatch({type:'quote', quote:k.q});
-  toast('重新登入好了，剛才沒確認送到的字已放回輸入框（雲端若已收到就不必再送）');
+// ── 重新登入跳轉的暫存（設計者 task-mvmrnjsp-7kepqi 方案 A）──
+// 跳轉會清掉頁面記憶體。帶過去的是訊息模型本身（每則的 mid、定格內容、每次送出的 cid／附件、狀態、放回關聯＋輸入框與它的來源），
+// 不是串好的文字：身分不變，回來原樣重試＝沿用同一個 cid（雲端認 cid 冪等），雲端已收就由第一次讀取認成已收到。
+// 前三輪 FAIL（bf84905／f7c7146／14203c1）全是「把訊息改用文字表示」各丟一種資訊。
+var CARRY_KEY = 'cb_carry_v1', CARRY_NOTE = '';
+function carryEnvelope(){
+  var assets = {}, seen = [];
+  function aid(a){   // 同一個圖物件只存一份、還原成同一個物件（送出時「原樣」判斷用 ===）
+    if(!a) return null; var i = seen.indexOf(a);
+    if(i < 0){ if(typeof a.b64 !== 'string' || !a.b64) throw new Error('圖沒有內容可暫存'); seen.push(a); i = seen.length - 1; assets['a'+i] = {mime:a.mime || 'image/jpeg', b64:a.b64}; }
+    return 'a'+i;
+  }
+  var msgs = msgList().filter(function(m){ return m.status !== 'accepted' || !m.seenInCloud || m.mid === COMPOSER.originMid; }).map(function(m){
+    var s = m.snapshot;
+    return {mid:m.mid, order:m.order, at:m.at || '', status:m.status, why:m.why || '', putBack:!!m.putBack, acceptedCid:m.acceptedCid || null,
+      seenInCloud:!!m.seenInCloud, replyAnchorId:m.replyAnchorId || null,
+      snapshot:{rawText:s.rawText, wireText:s.wireText, quote:s.quote || '', refs:s.refs || {}, asset:aid(s.asset)},
+      attempts:m.attempts.map(function(a){ return {attemptId:a.attemptId, cid:a.cid, phase:a.phase, askIssued:!!a.askIssued, attId:a.attId || '', outcome:a.outcome || null}; })};
+  });
+  var c = COMPOSER;
+  return {v:1, savedAt:Date.now(), counters:{msgn:MSGN, attseq:ATTSEQ, draftn:freshComposer.n}, msgs:msgs,
+    composer:{rawText:c.rawText, quote:c.quote || null, originMid:c.originMid || null, asset:aid(c.asset)}, assets:assets};
+}
+/** 存好並讀回核對一致才回 true；什麼都沒有就清掉舊紀錄。 */
+function carrySave(){
+  try{
+    var env = carryEnvelope(), c = env.composer;
+    if(!env.msgs.length && c.rawText === '' && !c.quote && !c.asset){ sessionStorage.removeItem(CARRY_KEY); return true; }   // 只有空白也算內容（不 trim）
+    var s = JSON.stringify(env); sessionStorage.setItem(CARRY_KEY, s);
+    return sessionStorage.getItem(CARRY_KEY) === s;
+  }catch(e){ return false; }
+}
+function carryValid(e){
+  if(!e || e.v !== 1 || !Array.isArray(e.msgs) || !e.composer || typeof e.composer.rawText !== 'string' || !e.counters || !e.assets || typeof e.assets !== 'object') return false;
+  var ids = {};
+  for(var i = 0; i < e.msgs.length; i++){
+    var m = e.msgs[i];
+    if(!m || typeof m.mid !== 'string' || ids[m.mid] || !m.snapshot || typeof m.snapshot.rawText !== 'string' || typeof m.snapshot.wireText !== 'string'
+       || !Array.isArray(m.attempts) || typeof m.status !== 'string') return false;
+    if(m.snapshot.asset && !e.assets[m.snapshot.asset]) return false;
+    if(!m.attempts.every(function(a){ return a && typeof a.cid === 'string' && typeof a.attemptId === 'number'; })) return false;
+    ids[m.mid] = 1;
+  }
+  if(e.composer.asset && !e.assets[e.composer.asset]) return false;
+  if(e.composer.originMid && !ids[e.composer.originMid]) return false;
+  return Object.keys(e.assets).every(function(k){ var a = e.assets[k]; return a && typeof a.b64 === 'string' && typeof a.mime === 'string'; });
+}
+/** 頁面一開就同步還原（在等 LIFF／雲端之前，律師還來不及打字）；格式不對就整份不還原、紀錄留著、不自動送任何東西。 */
+function carryRestore(){
+  var raw = null; try{ raw = sessionStorage.getItem(CARRY_KEY); }catch(e){}
+  if(raw === null){ legacyKeep(); return; }
+  var env = null; try{ env = JSON.parse(raw); }catch(e){}
+  if(!carryValid(env)){ CARRY_NOTE = '上次重新登入前暫存的訊息讀不出來，沒有放回（紀錄還留著）'; return; }
+  var objs = {};
+  Object.keys(env.assets).forEach(function(k){ var a = env.assets[k]; objs[k] = Object.freeze({url:'data:'+a.mime+';base64,'+a.b64, b64:a.b64, mime:a.mime}); });
+  env.msgs.forEach(function(m){
+    var s = m.snapshot, asset = s.asset ? objs[s.asset] : null;
+    MSGS[m.mid] = {mid:m.mid, snapshot:Object.freeze({rawText:s.rawText, wireText:s.wireText, quote:s.quote, asset:asset, refs:s.refs}),
+      attempts:m.attempts.map(function(a){ return {attemptId:a.attemptId, cid:a.cid, phase:a.phase, askIssued:!!a.askIssued, attId:a.attId || '', outcome:a.outcome}; }),
+      status:(m.status === 'sending' || m.status === 'new') ? 'unknown' : m.status, why:m.why, replyAnchorId:m.replyAnchorId, order:m.order, at:m.at,
+      putBack:m.putBack, acceptedCid:m.acceptedCid || undefined, seenInCloud:m.seenInCloud};
+    if(asset) m.attempts.forEach(function(a){ if(a.askIssued) LOCALIMG['m'+a.cid] = asset.url; });
+  });
+  MSGN = Math.max(MSGN, env.counters.msgn | 0); ATTSEQ = Math.max(ATTSEQ, env.counters.attseq | 0); freshComposer.n = Math.max(freshComposer.n, env.counters.draftn | 0);
+  var c = env.composer;
+  COMPOSER = {draftId:++freshComposer.n, rev:0, rawText:c.rawText, quote:c.quote || null, asset:c.asset ? objs[c.asset] : null, imageJobId:0, originMid:c.originMid || null};
+  paintComposer();
+  try{ sessionStorage.removeItem(CARRY_KEY); }catch(e){}   // 只用一次：之後的 boot 重試不會再插入
+  var n = env.msgs.filter(function(m){ return m.status !== 'accepted'; }).length;
+  CARRY_NOTE = '重新登入好了：' + (n ? n+' 則還沒確認送到的訊息留在下面（可重試或放回）' : '') + (n && (c.rawText || c.quote || c.asset) ? '，' : '') + ((c.rawText || c.quote || c.asset) ? '輸入框的內容已放回' : '');
+}
+function legacyKeep(){   // 10-25 02:0x–03:0x 版本留下的舊格式 {t,q}：只當歷史文字草稿放回，不捏造訊息身分
+  var k = null; try{ k = JSON.parse(sessionStorage.getItem('cb_keep') || 'null'); sessionStorage.removeItem('cb_keep'); }catch(e){}
+  if(!k || typeof k.t !== 'string' || !k.t) return;
+  COMPOSER = {draftId:++freshComposer.n, rev:0, rawText:k.t, quote:k.q || null, asset:null, imageJobId:0, originMid:null}; paintComposer();
+  CARRY_NOTE = '重新登入好了，剛才沒送出的字已放回輸入框';
 }
 /** 立刻讀一次（回到前景、網路恢復、點頁尾＝force；視窗拿到焦點＝2 秒內剛讀過就不重複）。正在讀：那一輪若是 2 秒前以前出發的，讀完再補一輪。
  *  回到前景一律 force：桌機切回分頁時 focus 常先到、剛讀過一次，不能讓它把「回前景立刻讀」吃掉（探針 t67）。 */
@@ -1263,7 +1335,7 @@ async function boot(){
   var ok = false;
   try{ ok = await load(); }catch(e){ BOOT.msg = '連不上雲端（'+(e.message||e)+'）'; }
   BOOT.busy = false;
-  if(ok){ BOOT.msg = ''; BOOT.n = 0; render(); fitQ(); keepRestore(); poll(); if(VIEW==='chat') window.scrollTo(0, document.body.scrollHeight); return; }
+  if(ok){ BOOT.msg = ''; BOOT.n = 0; render(); fitQ(); if(CARRY_NOTE){ toast(CARRY_NOTE); CARRY_NOTE = ''; } poll(); if(VIEW==='chat') window.scrollTo(0, document.body.scrollHeight); return; }
   var d = Math.min(60000, 5000 * Math.pow(2, BOOT.n++));   // 5、10、20、40、60 秒…一直重試，不再停在第一次失敗
   BOOT.msg = (BOOT.msg || '讀取失敗') + '，' + Math.round(d/1000) + ' 秒後自動重試';
   render(); BOOT.timer = setTimeout(boot, d);
@@ -1335,6 +1407,7 @@ document.getElementById('name').onclick=function(){ if(VIEW!=='tasks') document.
 document.getElementById('tasks').onclick=function(){VIEW='tasks';location.hash='tasks';render();};
 document.getElementById('back').onclick=function(){VIEW='chat';history.replaceState(null,'',location.pathname+location.search);render();};
 
+carryRestore();   // 同步、在等 LINE／雲端之前：重新登入跳轉帶回的訊息與輸入框先放回，律師打字不會跟還原搶
 (async function(){
   try{ await liff.init({liffId:LIFF_ID}); }
   catch(e){ document.getElementById('hd').textContent='LIFF 初始化失敗：'+(e.message||e); return; }

@@ -1528,9 +1528,11 @@ async def t76():   # 登入過期但有一則還沒確認收到 ⇒ 不自動跳
     await pg.fill("#q", "要送的字"); await pg.click("#send"); await pg.wait_for_timeout(1500)
     v = await pg.evaluate("({login: window.__login.length, hd: %s, st: UNSENT.map(function(x){return x.state})})" % HD)
     await pg.click("#hd"); await pg.wait_for_timeout(300)
-    v2 = await pg.evaluate("({login: window.__login.length, keep: sessionStorage.getItem('cb_keep')})")
+    v2 = await pg.evaluate("({login: window.__login.length, env: JSON.parse(sessionStorage.getItem('cb_carry_v1') || 'null')})")
     await done(p, b)
-    return (v["login"] == 0 and "點這裡重新登入" in v["hd"] and v2["login"] == 1 and "要送的字" in (v2["keep"] or "")), (v, v2)
+    env = v2["env"] or {"msgs": []}
+    return (v["login"] == 0 and "點這裡重新登入" in v["hd"] and v2["login"] == 1
+            and [m["snapshot"]["rawText"] for m in env["msgs"]] == ["要送的字"]), (v, v2)
 
 
 async def t77():   # LINE 認 token、但雲端回 forbidden（雲端驗證暫時失敗）⇒ 不跳轉、照實標示、照常重試；恢復後警示消失
@@ -1593,13 +1595,14 @@ async def t80():   # Codex 審 bf84905 P2：等 LINE 回覆（getProfile）期�
 
 async def t81():   # Codex 審 bf84905 P1：重登回來、第一次載入完成前就打了字 ⇒ 舊稿不得遺失（兩份都在輸入框）
     init = "try{sessionStorage.setItem('cb_keep', JSON.stringify({t:'舊稿', q:null}));}catch(e){}"
-    c, h = _cloud(); c["mode"] = "ABORT"   # 第一次載入失敗、5 秒後才重試：律師在這段空檔先打字
+    c, h = _cloud(); c["mode"] = "ABORT"   # 第一次載入失敗、5 秒後才重試：律師在這段空檔接著打字
     p, b, pg, log = await page_with(h, init=init)
     await pg.goto("https://x.test/"); await pg.wait_for_timeout(600)
-    await pg.fill("#q", "新打的"); c["mode"] = "ok"; await pg.wait_for_timeout(5500)
+    early = await pg.input_value("#q")   # 設計者 T01：舊稿在等雲端之前就放回
+    await pg.focus("#q"); await pg.keyboard.press("End"); await pg.keyboard.type("新打的"); c["mode"] = "ok"; await pg.wait_for_timeout(5500)
     v = await pg.evaluate("({q: document.getElementById('q').value, left: sessionStorage.getItem('cb_keep')})")
     await done(p, b)
-    return "舊稿" in v["q"] and "新打的" in v["q"] and v["left"] is None, v
+    return early == "舊稿" and v["q"] == "舊稿新打的" and v["left"] is None, (early, v)
 
 
 async def t82():   # Codex 審 bf84905 P1：手動點重登時，還沒確認送到的那則＋輸入框的下一則都要帶過去
@@ -1610,10 +1613,11 @@ async def t82():   # Codex 審 bf84905 P1：手動點重登時，還沒確認送
     await pg.fill("#q", "第一則"); await pg.click("#send"); await pg.wait_for_timeout(1200)
     await pg.fill("#q", "第二則"); await pg.wait_for_timeout(200)
     await pg.click("#hd"); await pg.wait_for_timeout(300)
-    v = await pg.evaluate("({login: window.__login.length, keep: sessionStorage.getItem('cb_keep')})")
+    v = await pg.evaluate("({login: window.__login.length, env: JSON.parse(sessionStorage.getItem('cb_carry_v1') || 'null')})")
     await done(p, b)
-    k = v["keep"] or ""
-    return v["login"] == 1 and "第一則" in k and "第二則" in k, v
+    env = v["env"] or {"msgs": [], "composer": {}}
+    return (v["login"] == 1 and [m["snapshot"]["rawText"] for m in env["msgs"]] == ["第一則"]
+            and env["composer"].get("rawText") == "第二則"), v
 
 
 async def t83():   # Codex 審 bf84905 P2：等回覆＋正在編輯別的文字框 ⇒ 每 30 秒仍讀完整狀態（收資料不重畫，打到一半的框不被換掉）
@@ -1647,9 +1651,11 @@ async def t84():   # Codex 審 f7c7146 P2：未確認的那則已「放回輸入
     await pg.fill("#q", "不要重複這則"); await pg.click("#send"); await pg.wait_for_timeout(1200)
     await pg.locator("button", has_text="放回輸入框").first.click(); await pg.wait_for_timeout(200)
     await pg.click("#hd"); await pg.wait_for_timeout(300)
-    v = await pg.evaluate("({login: window.__login.length, keep: JSON.parse(sessionStorage.getItem('cb_keep') || 'null')})")
+    v = await pg.evaluate("({login: window.__login.length, env: JSON.parse(sessionStorage.getItem('cb_carry_v1') || 'null')})")
     await done(p, b)
-    return v["login"] == 1 and v["keep"] and v["keep"]["t"] == "不要重複這則", v
+    env = v["env"] or {"msgs": [], "composer": {}}
+    return (v["login"] == 1 and len(env["msgs"]) == 1 and env["composer"].get("originMid") == env["msgs"][0]["mid"]
+            and env["composer"].get("rawText") == "不要重複這則"), v
 
 
 async def t85():   # Codex 審 f7c7146 P2：編輯草稿中輪詢換了 DATA（不重畫）⇒ 按舊卡片的「不用回」仍要記到目前資料、重畫後顯示已標記
@@ -1681,10 +1687,208 @@ async def t85():   # Codex 審 f7c7146 P2：編輯草稿中輪詢換了 DATA（�
     await done(p, b)
     return replaced and v["cur"] == ["no"] and "標記為不用回" in v["txt"], (replaced, v["cur"], v["txt"][-60:])
 
+
+# ── 設計者 task-mvmrnjsp-7kepqi 方案 A：重新登入跳轉＝原樣暫存訊息模型、回來原樣還原（身分 mid／cid 不變）──
+MODEL = """() => ({msgs: msgList().map(function(m){ return {mid: m.mid, status: m.status, text: m.snapshot.rawText,
+  quote: m.snapshot.quote || null, cids: m.attempts.map(function(a){ return a.cid; }), putBack: !!m.putBack, asset: !!m.snapshot.asset}; }),
+  comp: {raw: COMPOSER.rawText, quote: COMPOSER.quote || null, origin: COMPOSER.originMid || null, asset: !!COMPOSER.asset},
+  q: document.getElementById('q').value, unsent: UNSENT.length})"""
+
+
+def _asks(log):
+    return [x for x in log if x.get("op") == "ask"]
+
+
+async def _expired_page(liff=None, **kw):
+    """登入過期（雲端一律 forbidden）的頁面；回 (c, p, b, pg, log)。"""
+    c, h = _cloud()
+    p, b, pg, log = await page_with(h, liff=liff or liff_js(profile_ok=False), **kw)
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(800)
+    c["mode"] = "forbidden"
+    return c, p, b, pg, log
+
+
+async def _send(pg, text):
+    await pg.fill("#q", text); await pg.click("#send"); await pg.wait_for_timeout(900)
+
+
+async def _relogin_and_back(pg, c):
+    """先讓頁面讀一次撞到 forbidden（頁尾變「點這裡重新登入」）→ 點頁尾手動重登 → 確認有跳 → 雲端恢復 → 模擬回站（真的重新載入整頁）。"""
+    await pg.evaluate("kick(true); 0"); await pg.wait_for_timeout(500)
+    await pg.click("#hd"); await pg.wait_for_timeout(300)
+    went = await pg.evaluate("window.__login.length")
+    c["mode"] = "ok"
+    await pg.reload(); await pg.wait_for_timeout(1300)
+    return went
+
+
+async def t86():   # T02／T04／T16：兩則不同 mid 同文字＋下一則草稿（含引用）⇒ 回來後身分、cid、各自內容原樣；新送的 mid 不撞舊的
+    c, p, b, pg, log = await _expired_page()
+    await _send(pg, "同一句"); await _send(pg, "同一句")
+    await pg.fill("#q", "第二則草稿"); await pg.evaluate("setReply('引用乙'); 0")
+    before = await pg.evaluate(MODEL)
+    went = await _relogin_and_back(pg, c)
+    after = await pg.evaluate(MODEL)
+    await _send(pg, "新的一則")
+    mids = await pg.evaluate("msgList().map(function(m){ return m.mid; })")
+    await done(p, b)
+    keep = lambda m: [(x["mid"], x["text"], x["cids"], x["status"]) for x in m["msgs"]]
+    return (went == 1 and len(before["msgs"]) == 2 and keep(after) == keep(before)
+            and after["comp"]["raw"] == "第二則草稿" and after["comp"]["quote"] == "引用乙" and after["comp"]["origin"] is None
+            and len(set(mids)) == len(mids) == 3), (before, after, mids)
+
+
+async def t87():   # T03／T07：放回輸入框（原樣）→ 重登回來 → 原樣送出＝同一則重試、沿用同一個 cid，不新增訊息
+    c, p, b, pg, log = await _expired_page()
+    await _send(pg, "原樣這則")
+    cid0 = (await pg.evaluate(MODEL))["msgs"][0]["cids"][0]
+    await pg.locator("button", has_text="放回輸入框").first.click(); await pg.wait_for_timeout(200)
+    await _relogin_and_back(pg, c)
+    after = await pg.evaluate(MODEL)
+    n0 = len(_asks(log))
+    await pg.click("#send"); await pg.wait_for_timeout(900)
+    asks = _asks(log)[n0:]
+    v = await pg.evaluate(MODEL)
+    await done(p, b)
+    return (len(after["msgs"]) == 1 and after["comp"]["origin"] == after["msgs"][0]["mid"] and after["msgs"][0]["putBack"]
+            and len(asks) == 1 and asks[0]["cid"] == cid0 and len(v["msgs"]) == 1), (after, [a["cid"] for a in asks], cid0)
+
+
+async def t88():   # T05：放回後改寫 → 重登回來 ⇒ 原文定格不變、改稿與來源關聯都在；原訊息未確認前改稿不送
+    c, p, b, pg, log = await _expired_page()
+    await _send(pg, "原文")
+    await pg.locator("button", has_text="放回輸入框").first.click(); await pg.wait_for_timeout(200)
+    await pg.fill("#q", "改過的")
+    await _relogin_and_back(pg, c)
+    after = await pg.evaluate(MODEL)
+    n0 = len(_asks(log))
+    await pg.click("#send"); await pg.wait_for_timeout(600)
+    n1 = len(_asks(log))
+    await done(p, b)
+    return (len(after["msgs"]) == 1 and after["msgs"][0]["text"] == "原文" and after["comp"]["raw"] == "改過的"
+            and after["comp"]["origin"] == after["msgs"][0]["mid"] and n1 == n0), (after, n0, n1)
+
+
+async def t89():   # T06：未確認一則＋輸入框打了一樣的字（沒放回）⇒ 兩者都在，草稿不被誤綁來源
+    c, p, b, pg, log = await _expired_page()
+    await _send(pg, "一樣的字")
+    await pg.fill("#q", "一樣的字")
+    await _relogin_and_back(pg, c)
+    after = await pg.evaluate(MODEL)
+    await done(p, b)
+    return (len(after["msgs"]) == 1 and after["msgs"][0]["text"] == "一樣的字" and after["comp"]["raw"] == "一樣的字"
+            and after["comp"]["origin"] is None), after
+
+
+async def t90():   # T08：回站第一次讀到的雲端對話已有那則的 cid ⇒ 首次載入就認成已收到、待處理卡消失、原樣不再送
+    c, p, b, pg, log = await _expired_page()
+    await _send(pg, "雲端其實收到")
+    cid0 = (await pg.evaluate(MODEL))["msgs"][0]["cids"][0]
+    c["chat"] = [dict(BOT), {"id": "m" + cid0, "role": "me", "text": "雲端其實收到", "at": "2026-10-24T10:02:00"}]
+    await _relogin_and_back(pg, c)
+    after = await pg.evaluate(MODEL)
+    await done(p, b)
+    return (after["msgs"] and after["msgs"][0]["status"] == "accepted" and after["unsent"] == 0), after
+
+
+async def t91():   # T13：一則正在送／圖還在處理／正在選字 ⇒ 手動也不登出、不跳轉，頁尾講原因
+    out = []
+    for setup, word in (("ACTIVE = 99", "正在送"), ("COMPOSER.imageJobId = 5", "圖還在處理"), ("COMPOSING = true", "正在選字")):
+        c, p, b, pg, log = await _expired_page()
+        await _send(pg, "未確認的一則")
+        await pg.evaluate(setup + "; relogin(true); 0"); await pg.wait_for_timeout(200)
+        v = await pg.evaluate("({login: window.__login.length, logout: window.__logout, hd: %s})" % HD)
+        await done(p, b)
+        out.append((word, v["login"], v["logout"], word in v["hd"]))
+    return all(l == 0 and lo == 0 and hit for _, l, lo, hit in out), out
+
+
+async def t92():   # T14：暫存寫不進去（sessionStorage 拋錯）⇒ 不登出、不跳轉，頁尾講暫存不下
+    c, p, b, pg, log = await _expired_page()
+    await _send(pg, "存不下的這則")
+    await pg.evaluate("Storage.prototype.setItem = function(){ throw new Error('quota'); }; 0")
+    await pg.click("#hd"); await pg.wait_for_timeout(300)
+    v = await pg.evaluate("({login: window.__login.length, logout: window.__logout, hd: %s, n: msgList().length})" % HD)
+    await done(p, b)
+    return v["login"] == 0 and v["logout"] == 0 and "暫存不下" in v["hd"] and v["n"] == 1, v
+
+
+async def t93():   # T15：回站後第一次載入失敗→律師改了草稿→重試成功 ⇒ 舊暫存不再插入；暫存只用一次
+    c, p, b, pg, log = await _expired_page()
+    await pg.fill("#q", "原草稿")
+    await pg.evaluate("kick(true); 0"); await pg.wait_for_timeout(500)
+    hold = await pg.evaluate(HD)
+    await pg.click("#hd"); await pg.wait_for_timeout(300)
+    c["mode"] = "ABORT"
+    await pg.reload(); await pg.wait_for_timeout(800)
+    early = await pg.input_value("#q")
+    await pg.fill("#q", "改成這樣"); c["mode"] = "ok"; await pg.wait_for_timeout(5500)
+    v = await pg.evaluate("({q: document.getElementById('q').value, left: sessionStorage.getItem('cb_carry_v1'), d: !!DATA})")
+    await done(p, b)
+    return "點這裡重新登入" in hold and early == "原草稿" and v["q"] == "改成這樣" and v["left"] is None and v["d"], (hold, early, v)
+
+
+async def t94():   # T17：只有空白／只有引用 ⇒ 也算內容，原樣帶回（不被 trim 濾掉）
+    out = []
+    for setup in ("Q.value = '   '; Q.dispatchEvent(new Event('input'))", "setReply('只有引用')"):
+        c, p, b, pg, log = await _expired_page()
+        await pg.evaluate(setup + "; 0")
+        before = (await pg.evaluate(MODEL))["comp"]
+        await _relogin_and_back(pg, c)
+        after = (await pg.evaluate(MODEL))["comp"]
+        await done(p, b)
+        out.append((before, after))
+    return all(a["raw"] == bf["raw"] and a["quote"] == bf["quote"] for bf, a in out) and out[1][1]["quote"] == "只有引用", out
+
+
+async def t95():   # T18：暫存紀錄壞掉（不是 JSON）⇒ 不部分還原、紀錄保留、不自動送出，頁面照常載入
+    seed = "if(!sessionStorage.getItem('__seeded')){ sessionStorage.setItem('__seeded','1'); sessionStorage.setItem('cb_carry_v1','{bad'); }"
+    c, h = _cloud()
+    p, b, pg, log = await page_with(h, init=seed)
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(1000)
+    v = await pg.evaluate("({n: msgList().length, left: sessionStorage.getItem('cb_carry_v1'), d: !!DATA, q: document.getElementById('q').value})")
+    await done(p, b)
+    return v["n"] == 0 and v["left"] == "{bad" and v["d"] and v["q"] == "" and not _asks(log), v
+
+
+async def t96():   # T11／T12：附圖那則送不成→放回→重登回來 ⇒ 圖原樣（同一個圖物件＝判為原樣）、原樣送出沿用 cid 與已上傳的附件、不重傳圖
+    c, h = _cloud()
+    p, b, pg, log, ups = await mk(h, liff=liff_js(profile_ok=False))
+    c["mode"] = "forbidden"
+    await pg.evaluate("setAtt({url:'data:image/jpeg;base64,/9j/AA==', b64:'/9j/AA==', mime:'image/jpeg'}); Q.value='附圖這則'; fitQ(); SEND.onclick(); 0")
+    await pg.wait_for_timeout(900)
+    cid0 = (await pg.evaluate(MODEL))["msgs"][0]["cids"][0]
+    await pg.locator("button", has_text="放回輸入框").first.click(); await pg.wait_for_timeout(200)
+    await _relogin_and_back(pg, c)
+    same = await pg.evaluate("(function(){ var m = msgList()[0]; return !!m && COMPOSER.asset === m.snapshot.asset && m.snapshot.asset.b64 === '/9j/AA=='; })()")
+    nup = len(ups); n0 = len(_asks(log))
+    await pg.click("#send"); await pg.wait_for_timeout(900)
+    asks = _asks(log)[n0:]
+    await done(p, b)
+    return same and len(asks) == 1 and asks[0]["cid"] == cid0 and asks[0].get("att") == "att1" and len(ups) == nup == 1, (same, asks, nup, len(ups))
+
+
+async def t97():   # T19：LINE 內建瀏覽器走 logout＋reload ⇒ 同一套暫存／還原，回來訊息身分原樣、不循環跳轉
+    lj = liff_js(profile_ok=False).replace("isInClient:()=>false", "isInClient:()=>true")
+    c, p, b, pg, log = await _expired_page(liff=lj)
+    await _send(pg, "內建瀏覽器這則")
+    before = await pg.evaluate(MODEL)
+    async with pg.expect_navigation():
+        c["mode"] = "ok"
+        await pg.click("#hd")
+    await pg.wait_for_timeout(1300)
+    after = await pg.evaluate(MODEL)
+    await pg.wait_for_timeout(1500)
+    url_ok = await pg.evaluate("location.href")
+    await done(p, b)
+    k = lambda m: [(x["mid"], x["text"], x["cids"]) for x in m["msgs"]]
+    return k(after) == k(before) and len(before["msgs"]) == 1 and url_ok.startswith("https://x.test/"), (before, after)
+
 MATRIX = [t01, t02, t03, t04, t05, t06, t07, t08, t09, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20,
           t21, t22, t23, t24, t25, t26, t27, t28, t29, t30, t31, t32, t33, t34, t35, t36, t37,
           t38, t39, t40, t41, t42, t43, t44, t45, t46, t47, t48, t49, t50, t51, t52, t53, t54, t55, t56, t57, t58, t59, t60, t61, t62, t63, t64,
-          t65, t66, t67, t68, t69, t70, t71, t72, t73, t74, t75, t76, t77, t78, t79, t80, t81, t82, t83, t84, t85]
+          t65, t66, t67, t68, t69, t70, t71, t72, t73, t74, t75, t76, t77, t78, t79, t80, t81, t82, t83, t84, t85,
+          t86, t87, t88, t89, t90, t91, t92, t93, t94, t95, t96, t97]
 EXISTING = [t_cid_reused_after_timeout, t_failure_keeps_new_draft_and_quote, t_stale_poll_does_not_drop_new_message,
             t_teach_menu_keeps_draft, t_teach_record_flow, t_teach_review_84b793d, t_teach_out_of_order, t_teach_stop_response_late, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
             t_fail_after_typing_keeps_draft_and_unsent_full, t_fail_untouched_keeps_whole_message,
