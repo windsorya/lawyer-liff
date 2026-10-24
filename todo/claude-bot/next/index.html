@@ -368,7 +368,8 @@ function when(at){
   return (d===today ? '今天 ' : d===y ? '昨天 ' : (parseInt(at.slice(5,7),10)+'/'+parseInt(at.slice(8,10),10)+' ')) + t;
 }
 
-function chat(){ return (DATA && DATA.chat) || []; }
+var UNSENT = [];   // 沒送成、而輸入區已經打了新內容的那幾則：留在對話裡（長按可複製），不會因輪詢更新而消失（Codex 審 afaf952 P1）
+function chat(){ return ((DATA && DATA.chat) || []).concat(UNSENT); }
 
 /** 畫面上待回草稿的編號：照輪次時間排，1 起算。律師打「1 回了」時，頁面把這份對照一起送出，本機照它找卡片。 */
 function numberDrafts(){
@@ -391,6 +392,7 @@ function renderMsg(m, x){
     if(x.reaction) b.appendChild(el('span','rx',x.reaction));
     bindMenu(b, {id:x.id, text:x.text, reaction:x.reaction});
     w.appendChild(b); m.appendChild(w);
+    if(x.status === 'unsent'){ var u = el('div','turn'); u.appendChild(el('div','msg think','⚠️ 這則沒送成（'+(x.why||'')+'）——長按可複製，再貼到輸入框重送')); m.appendChild(u); return; }
     if(x.status === 'pending'){
       var t = el('div','turn'), box = el('div','msg think');
       var waited = (Date.now() - Date.parse(String(x.at||'').replace(' ','T')+'+08:00'))/1000;
@@ -633,7 +635,8 @@ SEND.onclick = async function(){
   var refs = {}; Object.keys(NUM).forEach(function(c){ refs[NUM[c]] = c; });
   if(att) LOCALIMG['m'+cid] = att.url;
   var mine = {id:'m'+cid, role:'me', text:text, quote:quote, att: att ? 'pending' : '', at:new Date(Date.now()+8*3600e3).toISOString().slice(0,19), status:'pending'};
-  DATA.chat = chat().filter(function(x){ return x.id !== mine.id; }).concat([mine]); Q.value=''; setAtt(null); fitQ(); render(); bottom();
+  UNSENT = UNSENT.filter(function(x){ return !(x.text === text && x.quote === quote); });   // 重送同一則：舊的「沒送成」拿掉
+  DATA.chat = (DATA.chat || []).filter(function(x){ return x.id !== mine.id; }).concat([mine]); Q.value=''; setAtt(null); fitQ(); render(); bottom();
   try{
     var attId = att ? await upload(cid, att) : '';
     var r = await api({op:'ask', text:text, cid:cid, refs:JSON.stringify(refs), quote:quote, att:attId});
@@ -645,13 +648,15 @@ SEND.onclick = async function(){
     // 雲端明確拒收（太長／滿了）＝確定沒收，下次換新 cid；逾時／連線失敗＝可能已收，下次同一則沿用 cid
     LASTFAIL = e.hard ? null : {cid:cid, text:text, quote:quote, att:att};
     SEQ++;
-    DATA.chat = chat().filter(function(x){ return x !== mine; });
-    var kept = Q.value.trim() !== '';   // 送出後他已經打了新的字 ⇒ 不蓋掉（Codex 審 12d3f62 P1）
-    if(!kept) Q.value = text === '（看這張圖）' ? '' : text;
-    if(att && !ATT) setAtt(att);
-    if(quote && !REPLY) setReply(quote);
+    DATA.chat = (DATA.chat || []).filter(function(x){ return x !== mine; });
+    // 輸入區在送出後完全沒動過（沒打字、沒換圖、引用沒改）才整則原封還原；動過就一個欄位都不碰（Codex 審 afaf952：
+    // 失敗把舊圖接到新字上、復活已取消的引用），沒送成的那則留在對話裡、內容完整可複製
+    var untouched = Q.value.trim() === '' && !ATT && REPLY === (quote || null);
+    var why = String(e.message || e);
+    if(untouched){ Q.value = text === '（看這張圖）' ? '' : text; if(att) setAtt(att); }
+    else UNSENT.push({id:'u'+cid, role:'me', text:text, quote:quote, att: att ? 'local' : '', status:'unsent', why:why, at:mine.at});
     render(); fitQ();
-    toast('沒送成：'+(e.message||e)+(kept ? '（你剛打的新內容保留著；沒送成的那則是「'+text.slice(0,20)+(text.length>20?'…':'')+'」）' : '，再按一次'));
+    toast('沒送成：'+why+(untouched ? '，再按一次' : '（你剛打的新內容保留著；沒送成的那則留在對話裡）'));
   }finally{ SENDING = false; fitQ(); }
 };
 // 兩指點擊（電腦＝右鍵 contextmenu）／長按 0.5 秒（手機）→ 選單
