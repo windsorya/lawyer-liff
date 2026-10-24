@@ -37,6 +37,18 @@
   .fab svg{width:24px;height:24px}
   .fab[hidden]{visibility:hidden;display:grid}
   .name{display:flex;align-items:center;gap:10px;height:52px;padding:0 20px 0 12px;border-radius:99px;background:var(--fab);box-shadow:var(--shadow)}
+  .name{cursor:pointer;touch-action:manipulation}
+  .prof{text-align:center;margin:8px 0 24px}
+  .prof svg{width:96px;height:96px}
+  .prof b{display:block;font-size:24px;font-weight:600;margin-top:10px}
+  .prof small{color:var(--sub);font-size:14px}
+  .item.tap{cursor:pointer}
+  .slots{display:none;padding:0 16px 12px}
+  .slots.on{display:block}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+  .chips span{display:inline-flex;align-items:center;gap:6px;background:var(--card);border-radius:99px;padding:6px 6px 6px 14px;font-variant-numeric:tabular-nums;font-size:17px}
+  .chips .x{width:28px;height:28px;font-size:15px}
+  .slots .add{padding:0;border:0}
   .name b{font-size:19px;font-weight:600;letter-spacing:.01em}
   .logo{width:30px;height:30px;flex:none}
   main{padding:calc(env(safe-area-inset-top) + 84px) 16px calc(env(safe-area-inset-bottom) + 112px);max-width:680px;margin:0 auto}
@@ -44,7 +56,9 @@
   /* 助理的一段話＝一塊淺灰大圓角面板（Grok Bot 截圖的樣子） */
   .turn{margin:0 0 18px}
   .when{font-size:13px;color:var(--faint);margin:0 6px 6px}
-  .msg{background:var(--panel);border-radius:24px;padding:16px 18px 18px}
+  .msg{background:var(--panel);border-radius:24px;padding:14px 18px 16px;width:fit-content;max-width:100%}
+  .sep{text-align:center;font-size:13px;color:var(--faint);margin:6px 0 12px}
+  .sys{text-align:center;font-size:13px;color:var(--sub);margin:-8px 0 16px}
   .say b{font-weight:600}
   .h{font-weight:700;margin:16px 0 6px}
   ul.bul{margin:0;padding:0 0 0 1.2em}
@@ -90,7 +104,8 @@
   input[type=time]{flex:1;background:var(--card);border:0;border-radius:12px;color:var(--ink);font:inherit;font-size:17px;padding:8px 12px}
   .sw{width:51px;height:31px;border-radius:99px;background:var(--line);position:relative;border:0;flex:none}
   .sw::after{content:"";position:absolute;top:2px;left:2px;width:27px;height:27px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.2);transition:left .18s ease-out}
-  .sw.on{background:#34c759} .sw.on::after{left:22px}
+  .quiet{color:var(--sub);font-size:15px}
+  .sw.on{background:#3478f6}   /* Grok Bot 實機：例行任務開關是藍色 */ .sw.on::after{left:22px}
   .foot{font-size:13px;color:var(--faint);margin:10px 6px}
   .empty{color:var(--sub);text-align:center;padding:40px 0}
 
@@ -120,7 +135,7 @@
   .go svg{width:20px;height:20px}
   #hd{text-align:center;font-size:12px;color:var(--faint);margin:0 0 6px;min-height:16px}
   .dock.hide{display:none}
-  .down{position:fixed;right:16px;bottom:calc(env(safe-area-inset-bottom) + 86px);z-index:4;width:46px;height:46px;transition:opacity .2s}
+  .down{position:fixed;left:calc(50% - 23px);bottom:calc(env(safe-area-inset-bottom) + 86px);z-index:4;width:46px;height:46px;transition:opacity .2s}
   .down.off{opacity:0;pointer-events:none}
   #toast{position:fixed;left:50%;bottom:calc(96px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--solid);color:var(--on-solid);
          padding:9px 16px;border-radius:99px;font-size:15px;opacity:0;transition:opacity .2s;pointer-events:none;white-space:nowrap;z-index:6}
@@ -131,7 +146,7 @@
 <div class="top">
   <button class="fab" id="back" aria-label="回對話" hidden>
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
-  <div class="name">
+  <div class="name" id="name" role="button" tabindex="0" aria-label="Claude Bot 個人頁與例行任務">
     <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="16" fill="#d97757"/>
       <g stroke="#fff" stroke-width="2.6" stroke-linecap="round"><path d="M16 7v18M7 16h18M9.6 9.6l12.8 12.8M22.4 9.6L9.6 22.4"/></g></svg>
     <b id="ttl">Claude Bot</b></div>
@@ -197,7 +212,7 @@ function renderRound(m, key, r){
   var drafts = r.drafts || [];
   var opened = r.opened || [];
   var turn = el('div','turn');
-  turn.appendChild(el('div','when', hm(r.at)||key.replace(/\s.*$/,'')));
+  if(m.tagName === 'DETAILS') turn.appendChild(el('div','when', hm(r.at)||key.replace(/\s.*$/,'')));
   var box = el('div','msg'); turn.appendChild(box);
   var pending = drafts.filter(function(d){return !d.decision;}).length;
   var say = el('div','say');
@@ -273,9 +288,29 @@ function renderChat(m){
   var items = loud.map(function(k){ return {at: st.rounds[k].at || '', round: k}; })
     .concat(chat().map(function(x){ return {at: x.at || '', msg: x}; }))
     .sort(function(a,b){ return a.at<b.at?-1:a.at>b.at?1:0; });
-  items.forEach(function(it){ if(it.round) renderRound(m, it.round, st.rounds[it.round]); else renderMsg(m, it.msg); });
+  var last = '';
+  items.forEach(function(it){
+    if(sepNeeded(last, it.at)) m.appendChild(el('div','sep', when(it.at)));
+    last = it.at || last;
+    if(it.round) renderRound(m, it.round, st.rounds[it.round]); else renderMsg(m, it.msg);
+  });
   var pend = 0; keys.forEach(function(k){ (st.rounds[k].drafts||[]).forEach(function(d){ if(!d.decision) pend++; }); });
   if(!pend && keys.every(done) && !chat().length) m.appendChild(el('div','empty','目前沒有要你回的'));
+}
+
+/** 置中時間分隔線（Grok Bot：「昨天 下午11:49」）：第一則、換日、或相隔 20 分鐘以上才出現。 */
+function sepNeeded(prev, at){
+  if(!at) return false;
+  if(!prev) return true;
+  if(prev.slice(0,10) !== at.slice(0,10)) return true;
+  return (Date.parse(at+'+08:00') - Date.parse(prev+'+08:00')) > 20*60e3;
+}
+function when(at){
+  var today = new Date(Date.now()+8*3600e3).toISOString().slice(0,10);
+  var y = new Date(Date.now()-16*3600e3).toISOString().slice(0,10);
+  var d = at.slice(0,10), h = parseInt(at.slice(11,13),10), mm = at.slice(14,16);
+  var t = (h<12?'上午':'下午') + ((h%12)||12) + ':' + mm;
+  return (d===today ? '今天 ' : d===y ? '昨天 ' : (parseInt(at.slice(5,7),10)+'/'+parseInt(at.slice(8,10),10)+' ')) + t;
 }
 
 function chat(){ return (DATA && DATA.chat) || []; }
@@ -293,9 +328,7 @@ var ASK_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strok
 function renderMsg(m, x){
   if(x.role === 'me'){
     var w = el('div','me'), b = el('div'); b.textContent = x.text;
-    var col = el('div'); col.style.maxWidth='82%'; col.style.background='none'; col.style.padding='0';
     w.appendChild(b); m.appendChild(w);
-    m.appendChild(el('div','foot', hm(x.at))).style.cssText='text-align:right;margin:-8px 8px 14px';
     if(x.status === 'pending'){
       var t = el('div','turn'), box = el('div','msg think');
       var waited = (Date.now() - Date.parse(String(x.at||'').replace(' ','T')+'+08:00'))/1000;
@@ -306,13 +339,17 @@ function renderMsg(m, x){
     return;
   }
   var turn = el('div','turn');
-  turn.appendChild(el('div','when', hm(x.at)));
   var box = el('div','msg'+(x.failed?' fail':''));
+  // 程式核對後實際做了的動作（本機附在回覆末尾、每行「✓ 」開頭）＝置中系統列，像 Grok Bot 的「已更新 例行任務」
+  var lines = String(x.text||'').split('\n'), acts = [];
+  while(lines.length && /^✓ /.test(lines[lines.length-1])) acts.unshift(lines.pop().slice(2));
+  while(lines.length && !lines[lines.length-1].trim()) lines.pop();
   var q = chat().filter(function(y){ return y.id === x.reply_to; })[0];
   if(q){ var a = el('div','ask'); a.innerHTML = ASK_ICON; a.appendChild(el('span',null,'“'+(q.text.length>40?q.text.slice(0,40)+'…':q.text)+'”')); box.appendChild(a); }
-  box.appendChild(el('div','txt', x.text));
+  box.appendChild(el('div','txt', lines.join('\n')));
   (x.drafts||[]).forEach(function(d, i){ box.appendChild(replyDraft(d, x.id+'#'+i)); });
   turn.appendChild(box); m.appendChild(turn);
+  acts.forEach(function(a){ m.appendChild(el('div','sys', a)); });
 }
 
 /** 回答裡的草稿：可改字、複製（Claude Bot 不會自己送 LINE）。 */
@@ -329,23 +366,34 @@ function replyDraft(d, key){
   return c;
 }
 
+var SLOTS_OPEN = false;
+/** Bot 個人頁（Grok Bot 實機：點名稱膠囊→大頭像、名稱、例行任務；每項＝任務名稱＋頻率＋開關）。 */
 function renderTasks(m){
   var s = DATA.settings || {};
   var slots = (s.slots || ['10:00','16:00','21:00']).slice().sort();
-  m.appendChild(el('div','sect','排程'));
+  var prof = el('div','prof');
+  prof.innerHTML = document.querySelector('.logo').outerHTML.replace('class="logo"','');
+  prof.appendChild(el('b',null,'Claude Bot')); prof.appendChild(el('small',null,'看 LINE 綠點、讀訊息、擬回覆草稿；不會自己送出'));
+  m.appendChild(prof);
+  m.appendChild(el('div','sect','例行任務'));
   var list = el('div','list');
+  // ① 巡查：頻率＝時段；點一下展開改時段（每項任務只有一個主角：名稱＋頻率）
+  var it = el('div','item tap'), tx = el('div','tx');
+  tx.appendChild(el('div',null,'LINE 綠點巡查')); tx.appendChild(el('small',null,'每天 '+slots.join('、')+' 左右'));
+  it.appendChild(tx); it.appendChild(el('span','quiet', SLOTS_OPEN ? '收起' : '改時段'));
+  it.onclick = function(){ SLOTS_OPEN = !SLOTS_OPEN; render(); };
+  list.appendChild(it);
+  var box = el('div','slots'+(SLOTS_OPEN?' on':'')), chips = el('div','chips');
   slots.forEach(function(t){
-    var it = el('div','item'); var tx = el('div','tx');
-    tx.appendChild(el('div','time',t)); tx.appendChild(el('small',null,'每天：看 LINE 綠點、點開讀訊息、擬回覆草稿'));
-    it.appendChild(tx);
-    var x = el('button','x','×'); x.setAttribute('aria-label','刪除 '+t);
+    var c = el('span',null,t), x = el('button','x','×'); x.setAttribute('aria-label','刪除 '+t);
     x.onclick = function(){
       var cur = (DATA.settings.slots || slots).slice();   // 用按下當時最新的設定算，不用畫面重繪前的舊清單（Codex 審 b75099a9）
       if(cur.length<=1){ toast('至少要留一個時段'); return; }
       save('slots', cur.filter(function(v){return v!==t;}).join(','));
     };
-    it.appendChild(x); list.appendChild(it);
+    c.appendChild(x); chips.appendChild(c);
   });
+  box.appendChild(chips);
   var add = el('div','add'); var inp = el('input'); inp.type='time'; inp.value=NEWSLOT;
   inp.oninput = function(){ NEWSLOT = inp.value; };
   var b = el('button','pill alt','新增'); b.onclick = function(){
@@ -355,13 +403,10 @@ function renderTasks(m){
     var sent = NEWSLOT;
     save('slots', cur.concat([sent]).sort().join(','), function(){ if(NEWSLOT === sent) NEWSLOT=''; });   // 先清再重繪，輸入框與狀態一致
   };
-  add.appendChild(inp); add.appendChild(b); list.appendChild(add); m.appendChild(list);
-
-  m.appendChild(el('div','sect','動作'));
-  var l2 = el('div','list');
-  l2.appendChild(sw('drafts','擬回覆草稿','只產生草稿給你看、推到晨報，不會自動送出'));
-  l2.appendChild(sw('auto_like','自動按讚','點開時對生日、喜事、升任、得獎當場按讚'));
-  m.appendChild(l2);
+  add.appendChild(inp); add.appendChild(b); box.appendChild(add); list.appendChild(box);
+  list.appendChild(sw('drafts','擬回覆草稿','跟著每輪巡查・只給你看，不會自動送出'));
+  list.appendChild(sw('auto_like','生日、喜事按讚','跟著每輪巡查・點開時當場按讚'));
+  m.appendChild(list);
   m.appendChild(el('div','foot','案件群、利衝名單、家人、未加白名單的社群一律不點開。設定第 '+(s.rev||0)+' 版'+(s.updatedAt?'・'+s.updatedAt:'')));
 }
 
@@ -467,6 +512,7 @@ window.addEventListener('scroll',function(){
   var far = document.body.scrollHeight - (window.scrollY + window.innerHeight) > 240;
   document.getElementById('down').className = 'fab down' + (far ? '' : ' off');
 },{passive:true});
+document.getElementById('name').onclick=function(){ if(VIEW!=='tasks') document.getElementById('tasks').onclick(); };
 document.getElementById('tasks').onclick=function(){VIEW='tasks';location.hash='tasks';render();};
 document.getElementById('back').onclick=function(){VIEW='chat';history.replaceState(null,'',location.pathname+location.search);render();};
 
