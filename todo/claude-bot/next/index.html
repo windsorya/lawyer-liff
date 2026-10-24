@@ -597,7 +597,7 @@ SEND.onclick = async function(){
     if(att){ attId = await upload(cid, att); setAtt(null); }
     var r = await api({op:'ask', text:text, cid:cid, refs:JSON.stringify(refs), quote:REPLY||'', att:attId});
     setReply(null);
-    if(!r.ok) throw new Error(r.msg==='too long'?'太長了':r.msg||'沒送成');
+    if(!r.ok) throw new Error(r.msg==='too long'?'太長了':r.msg==='full'?'還有太多題沒回完，等 Claude Bot 回完再傳':r.msg||'沒送成');
     DATA.chat = r.chat; render(); bottom(); poll();
   }catch(e){
     DATA.chat = chat().filter(function(x){ return x !== mine; }); Q.value = text === '（看這張圖）' ? '' : text; if(att && !ATT) setAtt(att); render(); toast('沒送成：'+(e.message||e)+'，再按一次');
