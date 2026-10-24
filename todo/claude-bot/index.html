@@ -457,7 +457,7 @@ function renderMsg(m, x){
   while(lines.length && !lines[lines.length-1].trim()) lines.pop();
   var q = chat().filter(function(y){ return y.id === x.reply_to; })[0];
   if(x.kind === 'task'){ var tg = el('div','ask'); tg.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>';
-    tg.appendChild(el('span',null,'例行任務・'+(x.task_name||''))); box.appendChild(tg); }
+    tg.appendChild(el('span',null,x.task_id === 'tccwork' ? 'Claude Code・交辦單' : '例行任務・'+(x.task_name||''))); box.appendChild(tg); }
   if(q){ var a = el('div','ask'); a.innerHTML = ASK_ICON; a.appendChild(el('span',null,'“'+(q.text.length>40?q.text.slice(0,40)+'…':q.text)+'”')); box.appendChild(a); }
   box.appendChild(el('div','txt', lines.join('\n')));
   (x.drafts||[]).forEach(function(d, i){ box.appendChild(replyDraft(d, x.id+'#'+i)); });

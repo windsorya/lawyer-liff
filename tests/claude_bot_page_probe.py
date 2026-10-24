@@ -880,9 +880,23 @@ async def t46():   # 表情失敗：只撤銷那一次，顯示回原樣
     return v == "", v
 
 
+async def t47():   # Claude Code 交辦單的通知（task_id tccwork，claude_bot_work.py）不標成「例行任務」；一般例行任務照舊
+    W = {"id": "brwork12345s", "role": "bot", "kind": "task", "task_id": "tccwork", "task_name": "Claude Code 交辦單",
+         "text": "開始處理你的交辦", "at": "2026-10-24T10:00:00"}
+    T = {"id": "brtask12345", "role": "bot", "kind": "task", "task_id": "tabcdef12", "task_name": "早報",
+         "text": "今天沒有新聞", "at": "2026-10-24T10:01:00"}
+    async def h(q, log):
+        return await base(q, log, chat=[W, T])
+    p, b, pg, log, ups = await mk(h, fast=True)
+    await pg.wait_for_timeout(400)
+    txt = await pg.evaluate("document.body.innerText"); await done(p, b)
+    ok = "Claude Code・交辦單" in txt and "例行任務・Claude Code" not in txt and "例行任務・早報" in txt
+    return ok, [ln for ln in txt.splitlines() if "交辦" in ln or "例行任務" in ln][:4]
+
+
 MATRIX = [t01, t02, t03, t04, t05, t06, t07, t08, t09, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20,
           t21, t22, t23, t24, t25, t26, t27, t28, t29, t30, t31, t32, t33, t34, t35, t36, t37,
-          t38, t39, t40, t41, t42, t43, t44, t45, t46]
+          t38, t39, t40, t41, t42, t43, t44, t45, t46, t47]
 EXISTING = [t_cid_reused_after_timeout, t_failure_keeps_new_draft_and_quote, t_stale_poll_does_not_drop_new_message,
             t_teach_menu_keeps_draft, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
             t_fail_after_typing_keeps_draft_and_unsent_full, t_fail_untouched_keeps_whole_message,
