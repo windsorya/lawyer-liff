@@ -503,7 +503,9 @@ function fillWork(m){
     if(x.status === 'running'){
       var used = typeof x.elapsed_s === 'number' ? x.elapsed_s + delay : null;
       // 活動條（不是完成度）：最近有新動作就流動、雲端沒收到回報或久無動作就變灰——一眼分辨施工中還是停了（設計者 ec1352 T09：不得用時間比例冒充完成比例）
-      var lively = !stale && typeof x.idle_s === 'number' && x.idle_s + delay < 120;
+      // 「停了沒」只有一個判準：條變灰＝文字說可能卡住（WORK_QUIET_S）。原本條 2 分鐘就灰、文字 8 分鐘才警示，
+      // 等 Codex 審查／跑全套測試的正常 3–6 分鐘被灰條演成當機（10-25 02:12 律師截圖問「當機了嗎」，實查兩個施工程序都活著在等）
+      var lively = !stale && typeof x.idle_s === 'number' && x.idle_s + delay <= WORK_QUIET_S;
       bar.style.width = '100%'; bar.className = lively ? 'run' : 'idle';
       line = '施工中'+wkTries(x)
         +'・時間已用 '+(used === null ? '不明' : ago(used*1000))+(typeof x.timeout_min === 'number' ? '（每輪最長 '+x.timeout_min+' 分）' : '（每輪上限不明）');   // 缺欄＝不明，不補假數值也不默默省略（設計者 ec1352 C）
@@ -511,7 +513,7 @@ function fillWork(m){
       if(x.activity === 'unbound') note = '動作紀錄暫時接不上（看不到做到哪一步，不代表停了）';
       else if(typeof x.idle_s === 'number'){ var q = x.idle_s + delay;
         note = stepTxt+'・最後一個是 '+ago(q*1000)+'前'+(x.doing ? '（'+x.doing+'）' : '');
-        if(q > WORK_QUIET_S && !stale){ warn = true; note += '。已經 '+ago(q*1000)+'沒有新動作，可能卡住了'; } }
+        if(!lively && !stale){ warn = true; note += '。已經 '+ago(q*1000)+'沒有新動作，可能卡住了'; } }
       else note = x.steps === 0 ? '剛開工，還沒看到動作' : stepTxt+'・最後動作時間不明';   // 「剛開工」只在確知 0 個動作時說（Codex 審 47fbc6f：缺 idle_s 不得當成剛開工）
     } else if(x.status === 'queued'){
       bar.style.width = '0%';

@@ -1543,10 +1543,27 @@ async def t77():   # LINE 認 token、但雲端回 forbidden（雲端驗證暫�
             and "雲端新來的一則" in v2["txt"]), (v, v2)
 
 
+
+async def t78():   # 「停了沒」單一判準：條變灰 ⇔ 文字說可能卡住；等審查 3–6 分鐘的正常等待不得變灰（10-25 律師截圖問「當機了嗎」）
+    import time
+    now_ms = int(time.time() * 1000)
+    p, b, pg = await _wk_page(None)
+    rows = []
+    for i, idle in enumerate((30, 130, 200, 330, 470, 490, 600, 1200)):
+        w = _work(now_ms, rx_ago=0, idle_s=idle, seq=now_ms + 10 + i)
+        w["items"] = w["items"][:1]
+        v = await pg.evaluate("""a => { workObserve({ok: true, work: a});
+          return {cls: document.querySelector('.wk .pb i').className, warn: %s.indexOf('可能卡住了') >= 0}; }""" % WK_TXT, w)
+        rows.append((idle, v["cls"], v["warn"]))
+    await done(p, b)
+    same = all((c == "idle") == wv for _, c, wv in rows)
+    normal_wait_runs = all(c == "run" for i, c, _ in rows if i <= 470)
+    return same and normal_wait_runs and rows[-1][1] == "idle", rows
+
 MATRIX = [t01, t02, t03, t04, t05, t06, t07, t08, t09, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20,
           t21, t22, t23, t24, t25, t26, t27, t28, t29, t30, t31, t32, t33, t34, t35, t36, t37,
           t38, t39, t40, t41, t42, t43, t44, t45, t46, t47, t48, t49, t50, t51, t52, t53, t54, t55, t56, t57, t58, t59, t60, t61, t62, t63, t64,
-          t65, t66, t67, t68, t69, t70, t71, t72, t73, t74, t75, t76, t77]
+          t65, t66, t67, t68, t69, t70, t71, t72, t73, t74, t75, t76, t77, t78]
 EXISTING = [t_cid_reused_after_timeout, t_failure_keeps_new_draft_and_quote, t_stale_poll_does_not_drop_new_message,
             t_teach_menu_keeps_draft, t_teach_record_flow, t_teach_review_84b793d, t_teach_out_of_order, t_teach_stop_response_late, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
             t_fail_after_typing_keeps_draft_and_unsent_full, t_fail_untouched_keeps_whole_message,
