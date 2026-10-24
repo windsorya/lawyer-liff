@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>教它一項任務：焦點測試</title>
+<style>
+  :root{--bg:#fff;--ink:#111;--line:#ccc}
+  @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#111;--ink:#eee;--line:#444}}
+  body{background:var(--bg);color:var(--ink);font:16px/1.6 system-ui,sans-serif;max-width:560px;margin:24px auto;padding:0 16px}
+  input{display:block;width:100%;box-sizing:border-box;margin:8px 0;padding:8px;border:1px solid var(--line);border-radius:8px;font:inherit;background:var(--bg);color:var(--ink)}
+</style>
+</head>
+<body>
+<!-- Claude Bot「教它一項任務」T19 實測頁（#4462）：兩個同名、沒有 id 的文字欄位，量 Chrome 網頁欄位會不會發
+     焦點通知、快速換欄時打字錄不錄得到（claude_bot_teach.record）。不連網、不存資料。 -->
+<h1>焦點測試頁</h1>
+<p>兩格同名、沒有 id；點第一格打字、按 Tab 換第二格再打字。</p>
+<input type="text" name="f" aria-label="欄位">
+<input type="text" name="f" aria-label="欄位">
+</body>
+</html>
