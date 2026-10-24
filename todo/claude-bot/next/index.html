@@ -94,14 +94,32 @@
   .foot{font-size:13px;color:var(--faint);margin:10px 6px}
   .empty{color:var(--sub);text-align:center;padding:40px 0}
 
-  /* 底部：膠囊列（今天的狀態＋重新整理）、捲到最新圓鈕 */
+  /* 對話：律師的話＝右側深色泡泡；回答引用他問的那句（Grok Bot 實機畫面） */
+  .me{display:flex;justify-content:flex-end;margin:0 0 14px}
+  .me div{max-width:82%;background:var(--solid);color:var(--on-solid);border-radius:24px;padding:10px 18px;white-space:pre-wrap;word-break:break-word;font-size:18px}
+  .me small{display:block;text-align:right;font-size:12px;color:var(--faint);margin:4px 8px 0}
+  .ask{display:flex;gap:8px;align-items:flex-start;color:var(--sub);font-size:16px;margin-bottom:8px}
+  .ask svg{width:18px;height:18px;flex:none;margin-top:3px}
+  .txt{white-space:pre-wrap;word-break:break-word}
+  .msg.fail{border:1px solid var(--warn)}
+  .think{color:var(--sub)}
+  .think i{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--faint);margin-right:5px;animation:bl 1.2s infinite}
+  .think i:nth-child(2){animation-delay:.2s} .think i:nth-child(3){animation-delay:.4s}
+  @keyframes bl{0%,80%,100%{opacity:.25}40%{opacity:1}}
+  .num{display:inline-grid;place-items:center;min-width:24px;height:24px;border-radius:12px;background:var(--solid);color:var(--on-solid);font-size:13px;font-weight:600;margin-right:8px;padding:0 6px}
+
+  /* 底部：輸入框（傳訊息給 Claude Bot）、捲到最新圓鈕 */
   .dock{position:fixed;left:0;right:0;bottom:0;z-index:5;padding:14px 16px calc(env(safe-area-inset-bottom) + 12px);
         background:linear-gradient(transparent, var(--bg) 45%)}
-  .bar{width:100%;max-width:648px;margin:0 auto;display:flex;align-items:center;gap:10px;height:58px;padding:0 7px 0 20px;
-       border:0;border-radius:99px;background:var(--fab);box-shadow:var(--shadow);text-align:left;touch-action:manipulation}
-  .bar #hd{flex:1;font-size:17px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .bar .go{width:44px;height:44px;border-radius:50%;background:var(--solid);color:var(--on-solid);display:grid;place-items:center;flex:none}
-  .bar .go svg{width:20px;height:20px}
+  .bar{width:100%;max-width:648px;margin:0 auto;display:flex;align-items:flex-end;gap:10px;min-height:58px;padding:7px 7px 7px 20px;
+       border-radius:29px;background:var(--fab);box-shadow:var(--shadow)}
+  .bar textarea{flex:1;min-height:44px;max-height:160px;background:none;border:0;border-radius:0;padding:10px 0;font-size:17px;line-height:1.45}
+  .bar textarea::placeholder{color:var(--faint)}
+  .go{width:44px;height:44px;border-radius:50%;border:0;background:var(--solid);color:var(--on-solid);display:grid;place-items:center;flex:none;touch-action:manipulation}
+  .go:disabled{opacity:.25}
+  .go svg{width:20px;height:20px}
+  #hd{text-align:center;font-size:12px;color:var(--faint);margin:0 0 6px;min-height:16px}
+  .dock.hide{display:none}
   .down{position:fixed;right:16px;bottom:calc(env(safe-area-inset-bottom) + 86px);z-index:4;width:46px;height:46px;transition:opacity .2s}
   .down.off{opacity:0;pointer-events:none}
   #toast{position:fixed;left:50%;bottom:calc(96px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--solid);color:var(--on-solid);
@@ -123,8 +141,9 @@
 <main id="main"></main>
 <button class="fab down off" id="down" aria-label="捲到最新">
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
-<div class="dock"><button class="bar" id="bar" aria-label="重新整理"><span id="hd">讀取中…</span>
-  <span class="go"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5"/></svg></span></button></div>
+<div class="dock" id="dock"><div id="hd">讀取中…</div>
+  <div class="bar"><textarea id="q" rows="1" placeholder="傳訊息給 Claude Bot" aria-label="傳訊息給 Claude Bot"></textarea>
+  <button class="go" id="send" aria-label="送出" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button></div></div>
 <div id="toast"></div>
 
 <script>
@@ -132,7 +151,7 @@
 // 身分＝LIFF token → GAS 打 LINE /v2/profile 比對律師 userId。所有字串一律用 textContent 放進畫面（不拼 HTML）。
 var GAS = 'https://script.google.com/macros/s/AKfycbwKmbZb9cjf5O3t4k1uZN9973YwGAeTflMRYq9_IiaA59kOZO1pdjkXelNLYcJYYabu_g/exec';
 var LIFF_ID = '2009829573-HqpYQNtn';
-var TOKEN = null, DATA = null, VIEW = 'chat', EDITS = {}, NEWSLOT = '';
+var TOKEN = null, DATA = null, VIEW = 'chat', EDITS = {}, NEWSLOT = '', NUM = {};   // NUM：卡片編號 → 畫面上的第幾則（傳訊息時一起送，「1 回了」才對得上）
 
 function toast(t){var e=document.getElementById('toast');e.textContent=t;e.className='on';clearTimeout(toast.t);toast.t=setTimeout(function(){e.className='';},2400);}
 function el(tag, cls, text){var e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e;}
@@ -189,7 +208,7 @@ function renderRound(m, key, r){
   if(drafts.length){
     say.appendChild(document.createTextNode(lead+'，'));
     say.appendChild(el('b',null, pending ? '有 '+pending+' 則要你回' : '要回的都處理好了'));
-    say.appendChild(document.createTextNode(pending ? '。草稿可以直接改字，按「複製」到 LINE 貼上。' : '。'));
+    say.appendChild(document.createTextNode(pending ? '。草稿可以直接改字按「複製」，或在下面打「1 回了」「2 不用回」。' : '。'));
   } else {
     say.textContent = lead + (unfinished ? '，目前還沒有要你回的。' : (n ? '，沒有需要你回的。' : '。'));
     say.className = 'say';   // 沒做完的輪次不能說成「沒有要回的」（Codex 審 b75099a9）
@@ -207,7 +226,9 @@ function renderRound(m, key, r){
 
 function draftCard(d){
   var c = el('div','card');
-  c.appendChild(el('div','to','給 '+d.chat));
+  var to = el('div','to');
+  if(NUM[d.card_id] && !d.decision) to.appendChild(el('span','num',String(NUM[d.card_id])));
+  to.appendChild(document.createTextNode('給 '+d.chat)); c.appendChild(to);
   if(d.head) c.appendChild(el('div','quote',d.head));
   var ta = el('textarea'); ta.value = EDITS[d.card_id] != null ? EDITS[d.card_id] : (d.draft||'');
   ta.setAttribute('aria-label','回覆草稿（可直接修改）');
@@ -249,10 +270,63 @@ function renderChat(m){
     quiet.forEach(function(k){ renderRound(det, k, st.rounds[k]); });
     m.appendChild(det);
   }
-  loud.forEach(function(k){ renderRound(m, k, st.rounds[k]); });
+  var items = loud.map(function(k){ return {at: st.rounds[k].at || '', round: k}; })
+    .concat(chat().map(function(x){ return {at: x.at || '', msg: x}; }))
+    .sort(function(a,b){ return a.at<b.at?-1:a.at>b.at?1:0; });
+  items.forEach(function(it){ if(it.round) renderRound(m, it.round, st.rounds[it.round]); else renderMsg(m, it.msg); });
   var pend = 0; keys.forEach(function(k){ (st.rounds[k].drafts||[]).forEach(function(d){ if(!d.decision) pend++; }); });
-  if(!pend && keys.every(done)) m.appendChild(el('div','empty','目前沒有要你回的'));
-  m.appendChild(el('div','foot','更新於 '+(st.pushedAt||'—').replace('T',' ')));
+  if(!pend && keys.every(done) && !chat().length) m.appendChild(el('div','empty','目前沒有要你回的'));
+}
+
+function chat(){ return (DATA && DATA.chat) || []; }
+
+/** 畫面上待回草稿的編號：照輪次時間排，1 起算。律師打「1 回了」時，頁面把這份對照一起送出，本機照它找卡片。 */
+function numberDrafts(){
+  NUM = {}; var st = DATA && DATA.state, n = 0;
+  if(!st || !st.rounds) return;
+  Object.keys(st.rounds).sort(function(x,y){ var a=(st.rounds[x].at||'')+x, b=(st.rounds[y].at||'')+y; return a<b?-1:a>b?1:0; })
+    .forEach(function(k){ (st.rounds[k].drafts||[]).forEach(function(d){ if(d.card_id && !d.decision) NUM[d.card_id] = ++n; }); });
+}
+
+var ASK_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8.5 8.5 0 0 1-12.6 7.4L3 21l1.6-5.1A8.5 8.5 0 1 1 21 12z"/><path d="M8 12h.01M12 12h.01M16 12h.01"/></svg>';
+
+function renderMsg(m, x){
+  if(x.role === 'me'){
+    var w = el('div','me'), b = el('div'); b.textContent = x.text;
+    var col = el('div'); col.style.maxWidth='82%'; col.style.background='none'; col.style.padding='0';
+    w.appendChild(b); m.appendChild(w);
+    m.appendChild(el('div','foot', hm(x.at))).style.cssText='text-align:right;margin:-8px 8px 14px';
+    if(x.status === 'pending'){
+      var t = el('div','turn'), box = el('div','msg think');
+      var waited = (Date.now() - Date.parse(String(x.at||'').replace(' ','T')+'+08:00'))/1000;
+      if(waited > 180){ box.textContent = 'Mac 還沒接手（可能闔上或在睡眠），開機後會回你。'; }
+      else { box.appendChild(el('i')); box.appendChild(el('i')); box.appendChild(el('i')); box.appendChild(document.createTextNode(' 正在看…')); }
+      t.appendChild(box); m.appendChild(t);
+    }
+    return;
+  }
+  var turn = el('div','turn');
+  turn.appendChild(el('div','when', hm(x.at)));
+  var box = el('div','msg'+(x.failed?' fail':''));
+  var q = chat().filter(function(y){ return y.id === x.reply_to; })[0];
+  if(q){ var a = el('div','ask'); a.innerHTML = ASK_ICON; a.appendChild(el('span',null,'“'+(q.text.length>40?q.text.slice(0,40)+'…':q.text)+'”')); box.appendChild(a); }
+  box.appendChild(el('div','txt', x.text));
+  (x.drafts||[]).forEach(function(d, i){ box.appendChild(replyDraft(d, x.id+'#'+i)); });
+  turn.appendChild(box); m.appendChild(turn);
+}
+
+/** 回答裡的草稿：可改字、複製（Claude Bot 不會自己送 LINE）。 */
+function replyDraft(d, key){
+  var c = el('div','card');
+  if(d.to) c.appendChild(el('div','to','給 '+d.to));
+  var ta = el('textarea'); ta.value = EDITS[key] != null ? EDITS[key] : d.text; ta.setAttribute('aria-label','草稿（可直接修改）');
+  function fit(){ ta.style.height='auto'; ta.style.height=(ta.scrollHeight+2)+'px'; }
+  ta.oninput = function(){ EDITS[key] = ta.value; fit(); }; setTimeout(fit,0);
+  c.appendChild(ta);
+  var acts = el('div','acts'), cp = el('button','pill main','複製');
+  cp.onclick = function(){ copyText(ta.value, function(ok){ toast(ok ? '已複製，到 LINE 貼上即可' : '複製失敗，請長按文字複製'); }); };
+  acts.appendChild(cp); c.appendChild(acts);
+  return c;
 }
 
 function renderTasks(m){
@@ -303,13 +377,14 @@ function sw(name, label, hint){
 function header(){
   var st = DATA && DATA.state, pend = 0;
   Object.values((st&&st.rounds)||{}).forEach(function(x){ (x.drafts||[]).forEach(function(d){ if(!d.decision) pend++; }); });
-  var at = st && st.pushedAt ? '・'+String(st.pushedAt).slice(11,16)+' 更新' : '';
+  var at = st && st.pushedAt ? '・巡查結果 '+String(st.pushedAt).slice(5,16).replace('T',' ')+' 更新' : '';
   document.getElementById('hd').textContent = (st && st.day ? (pend ? pend+' 則待回' : '沒有待回') : '尚無紀錄') + at;
 }
 
 function render(){
   var m = document.getElementById('main'); m.textContent='';
-  if(DATA) header();   // 待回數每次重繪都重算（Codex 審 b75099a9：按完頁首還寫 1 則待回）
+  if(DATA){ numberDrafts(); header(); }   // 待回數每次重繪都重算（Codex 審 b75099a9：按完頁首還寫 1 則待回）
+  document.getElementById('dock').className = 'dock' + (VIEW==='tasks' ? ' hide' : '');
   document.getElementById('back').hidden = VIEW!=='tasks';
   document.getElementById('tasks').hidden = VIEW==='tasks';
   document.getElementById('ttl').textContent = VIEW==='tasks' ? '例行任務' : 'Claude Bot';
@@ -349,13 +424,43 @@ async function load(){
   return true;
 }
 
-// 底部膠囊＝重新整理；右下圓鈕＝捲到最新（離底部遠才出現）
-var RELOADING = false;
-document.getElementById('bar').onclick=async function(){
-  if(RELOADING || !TOKEN) return; RELOADING = true; document.getElementById('hd').textContent='更新中…';
-  try{ if(await load()) render(); }catch(e){ toast('連線失敗，請再按一次'); if(DATA) header(); }
-  finally{ RELOADING = false; }
+// 底部輸入框：送出＝存到 GAS（pending），Mac 上的 Claude 讀到後回答；等回覆時每 4 秒看一次
+var Q = document.getElementById('q'), SEND = document.getElementById('send'), SENDING = false;
+function fitQ(){ Q.style.height='auto'; Q.style.height=Math.min(Q.scrollHeight,160)+'px'; SEND.disabled = SENDING || !Q.value.trim() || !TOKEN; }
+Q.oninput = fitQ;
+SEND.onclick = async function(){
+  var text = Q.value.trim(); if(!text || SENDING || !DATA) return;
+  if(text.length > 2000){ toast('太長了（最多 2000 字）'); return; }
+  SENDING = true; fitQ();
+  var cid = (Date.now().toString(36) + Math.random().toString(36).slice(2)).replace(/[^a-z0-9]/g,'').slice(0,20);
+  var refs = {}; Object.keys(NUM).forEach(function(c){ refs[NUM[c]] = c; });
+  var mine = {id:'m'+cid, role:'me', text:text, at:new Date(Date.now()+8*3600e3).toISOString().slice(0,19), status:'pending'};
+  DATA.chat = chat().concat([mine]); Q.value=''; fitQ(); render(); bottom();
+  try{
+    var r = await api({op:'ask', text:text, cid:cid, refs:JSON.stringify(refs)});
+    if(!r.ok) throw new Error(r.msg==='too long'?'太長了':r.msg||'沒送成');
+    DATA.chat = r.chat; render(); bottom(); poll();
+  }catch(e){
+    DATA.chat = chat().filter(function(x){ return x !== mine; }); Q.value = text; render(); toast('沒送成：'+(e.message||e)+'，再按一次');
+  }finally{ SENDING = false; fitQ(); }
 };
+var POLL = null;
+function waiting(){ return chat().some(function(x){ return x.role==='me' && x.status==='pending'; }); }
+function editing(){ var a = document.activeElement; return a && a.tagName==='TEXTAREA' && a.id!=='q'; }
+function poll(){
+  clearTimeout(POLL);
+  POLL = setTimeout(async function(){
+    if(document.hidden || !TOKEN){ poll(); return; }
+    try{
+      var near = document.body.scrollHeight - (window.scrollY + window.innerHeight) < 200;
+      if(waiting()){ var r = await api({op:'chat'}); if(r.ok){ var was = JSON.stringify(chat()); DATA.chat = r.chat;
+        if(JSON.stringify(r.chat) !== was && !editing()){ render(); if(near) bottom(); } } }
+      else if(!editing() && await load()){ render(); }
+    }catch(e){}
+    poll();
+  }, waiting() ? 4000 : 30000);
+}
+document.addEventListener('visibilitychange', function(){ if(!document.hidden && TOKEN) poll(); });
 function bottom(){ window.scrollTo({top:document.body.scrollHeight, behavior:'smooth'}); }
 document.getElementById('down').onclick=bottom;
 window.addEventListener('scroll',function(){
@@ -372,7 +477,7 @@ document.getElementById('back').onclick=function(){VIEW='chat';history.replaceSt
   TOKEN = liff.getAccessToken();
   if(location.hash==='#tasks') VIEW='tasks';
   render();
-  try{ if(await load()){ render(); if(VIEW==='chat') window.scrollTo(0, document.body.scrollHeight); } }
+  try{ if(await load()){ render(); fitQ(); poll(); if(VIEW==='chat') window.scrollTo(0, document.body.scrollHeight); } }
   catch(e){ document.getElementById('hd').textContent=(e.message||String(e)); }
 })();
 </script>
