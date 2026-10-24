@@ -426,7 +426,14 @@ function renderChat(m){
 // ・讀取**失敗**的期間用本機時鐘量（只量這支手機自己的事）。
 // ・進度區自己確保容器存在，不依賴整頁重畫（打字中首次收到進度也會出現）。
 var WORK = null, WORK_NOW = 0, WORK_OK_AT = 0, WORK_FAIL_AT = 0;
-function validWork(w){ return !!w && typeof w === 'object' && typeof w.rx === 'number' && typeof w.now === 'number' && Array.isArray(w.items); }
+var WK_STATUS = {queued:1, running:1, done:1, failed:1, needs_owner:1};
+function validItem(x){   // 每一項都要像樣：壞的一項就當整份讀取異常、保留舊卡（Codex 審 1a4ee7f：items:[null] 讓卡片消失、輪詢停止；items:[{}] 顯示「undefined ✗ 沒做成」）
+  if(!x || typeof x !== 'object') return false;
+  if(x.status === 'more') return typeof x.count === 'number';
+  return typeof x.id === 'string' && typeof x.text === 'string' && WK_STATUS[x.status] === 1;
+}
+function validWork(w){ return !!w && typeof w === 'object' && typeof w.rx === 'number' && typeof w.now === 'number'
+  && typeof w.seq === 'number' && Array.isArray(w.items) && w.items.every(validItem); }   // seq 必須是數字（字串比大小會倒退）
 function workObserve(r){
   var ok = !!(r && r.ok === true && 'work' in r && (r.work === null ? !WORK : validWork(r.work)));
   if(!ok){ if(!WORK_FAIL_AT) WORK_FAIL_AT = Date.now(); paintWork(); return; }
@@ -434,14 +441,15 @@ function workObserve(r){
   var w = r.work;
   if(w){
     if(w.now > WORK_NOW) WORK_NOW = w.now;
-    if(!WORK || (w.seq || 0) > (WORK.seq || 0) || (!w.seq && !WORK.seq && w.rx > WORK.rx)) WORK = w;
+    if(!WORK || w.seq > WORK.seq) WORK = w;
   }
   paintWork();
 }
 function workItems(){ return (WORK && WORK.items) || []; }
 function workLive(){ return workItems().some(function(x){ return x.status === 'queued' || x.status === 'running'; }); }
 function ago(ms){ var s = Math.max(0, Math.round(ms/1000)); return s < 60 ? s+' 秒' : s < 3600 ? Math.round(s/60)+' 分鐘' : Math.floor(s/3600)+' 小時 '+Math.round(s%3600/60)+' 分'; }
-function hm(t){ if(isNaN(t)) return ''; var d = new Date(t + 8*3600e3); return ('0'+d.getUTCHours()).slice(-2)+':'+('0'+d.getUTCMinutes()).slice(-2); }
+function wkHm(t){ if(isNaN(t)) return ''; var d = new Date(t + 8*3600e3);   // 進度區專用（毫秒→台北 HH:MM）；不得覆蓋上面吃日期字串的 hm()（Codex 審 1a4ee7f：草稿卡「已回（）」）
+  return ('0'+d.getUTCHours()).slice(-2)+':'+('0'+d.getUTCMinutes()).slice(-2); }
 var WORK_STALE_MS = 3*60*1000;   // 本機每 20 秒推、沒變也每分鐘心跳；雲端 3 分鐘沒收到新回報＝Mac 沒在回報（不保證 Mac 正在跑，只說雲端沒收到）
 var WORK_PHONE_MS = 90*1000;    // 這支手機連續 90 秒讀取失敗（輪詢每 10 秒）＝是手機連不上，不是 Mac 的問題
 var WORK_OLD_MS = 30*1000;      // 上次讀到雲端超過 30 秒（例如打字時輪詢暫停）：註明進度是幾點讀到的
@@ -485,7 +493,7 @@ function fillWork(m){
     } else {
       bar.style.width = '100%'; bar.className = x.status === 'done' ? 'ok' : 'bad';
       var when = (typeof x.ago_s === 'number') ? ago((x.ago_s + delay)*1000)+'前' : '';
-      var where = x.notice_posted ? '結果貼在上面' : '結果通知還在送';
+      var where = x.notice_posted ? '結果已送進對話' : '結果通知還在送';   // 只講送達，不講「貼在上面」（打字中對話可能還沒重畫——Codex 審 1a4ee7f T14）
       line = x.status === 'done' ? '✓ 做完了（'+when+'），'+where : x.status === 'needs_owner' ? '要你本人處理一步（'+when+'），'+where : '✗ 沒做成（'+when+'），'+where;
     }
     pb.appendChild(bar); c.appendChild(pb);
@@ -495,7 +503,7 @@ function fillWork(m){
       c.appendChild(el('div','wkn warn','雲端已經 '+ago(delay*1000)+'沒收到 Mac 的回報（Mac 可能闔上或睡眠）；開機後會接著做，這裡也會更新'));
     m.appendChild(c);
   });
-  var seen = hm(WORK_OK_AT);
+  var seen = wkHm(WORK_OK_AT);
   if(phoneOff) m.appendChild(el('div','wkn warn','這支手機已經 '+ago(Date.now() - WORK_FAIL_AT)+'讀不到雲端（網路斷了？），上面是 '+seen+' 讀到的進度'));
   else if(old) m.appendChild(el('div','wkn','以上是 '+seen+' 讀到的進度'));
 }

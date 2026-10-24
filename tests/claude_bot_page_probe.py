@@ -1240,7 +1240,7 @@ async def t61():   # 完成與通知分離（設計者 T14）：通知還沒送�
       workObserve({ok: true, work: a[1]}); return [x, %s]; }""" % (WK_TXT, WK_TXT),
         [_done_work(now_ms, posted=False, seq=now_ms + 1), _done_work(now_ms, posted=True, seq=now_ms + 2)])
     await done(p, b)
-    return "結果通知還在送" in t[0] and "貼在上面" not in t[0] and "結果貼在上面" in t[1], t
+    return "結果通知還在送" in t[0] and "已送進對話" not in t[0] and "結果已送進對話" in t[1], t
 
 
 async def t56():   # 跨兩則選字後在第二則按右鍵：交給瀏覽器原生選單（不 preventDefault）
@@ -1258,9 +1258,26 @@ async def t56():   # 跨兩則選字後在第二則按右鍵：交給瀏覽器�
     return v["prevented"] is False and v["menu"] == "", v
 
 
+
+async def t62():   # Codex 審 1a4ee7f：hm() 被進度區同名函式蓋掉 ⇒ 草稿卡「已回（）」；壞項目／字串版本號不得蓋掉正常卡或讓版本倒退
+    import time
+    now_ms = int(time.time() * 1000)
+    p, b, pg = await _wk_page()
+    v = await pg.evaluate("""a => { const out = {hm: hm('2026-10-24T10:05:00')};
+      workObserve({ok: true, work: a[0]}); const good = WORK.seq;
+      for (const items of [[null], [{}], [{id: 'x', text: 't', status: 'weird'}]]) {
+        WORK_FAIL_AT = 0; workObserve({ok: true, work: Object.assign({}, a[0], {seq: good + 5, items: items})});
+        if (WORK.seq !== good || !WORK_FAIL_AT) out.bad = (out.bad || 0) + 1; }
+      workObserve({ok: true, work: Object.assign({}, a[0], {seq: String(good + 9)})});
+      out.strSeqRejected = WORK.seq === good;
+      out.txt = %s; return out; }""" % WK_TXT, [_work(now_ms)])
+    await done(p, b)
+    return v["hm"] == "10:05" and not v.get("bad") and v["strSeqRejected"] and "undefined" not in v["txt"] and "施工中" in v["txt"], v
+
+
 MATRIX = [t01, t02, t03, t04, t05, t06, t07, t08, t09, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20,
           t21, t22, t23, t24, t25, t26, t27, t28, t29, t30, t31, t32, t33, t34, t35, t36, t37,
-          t38, t39, t40, t41, t42, t43, t44, t45, t46, t47, t48, t49, t50, t51, t52, t53, t54, t55, t56, t57, t58, t59, t60, t61]
+          t38, t39, t40, t41, t42, t43, t44, t45, t46, t47, t48, t49, t50, t51, t52, t53, t54, t55, t56, t57, t58, t59, t60, t61, t62]
 EXISTING = [t_cid_reused_after_timeout, t_failure_keeps_new_draft_and_quote, t_stale_poll_does_not_drop_new_message,
             t_teach_menu_keeps_draft, t_teach_record_flow, t_teach_review_84b793d, t_teach_out_of_order, t_teach_stop_response_late, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
             t_fail_after_typing_keeps_draft_and_unsent_full, t_fail_untouched_keeps_whole_message,
