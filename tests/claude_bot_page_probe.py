@@ -117,9 +117,45 @@ async def t_teach_menu_keeps_draft():
     await pg.fill("#q", "我還沒送的字")
     await pg.click("#plus"); await pg.wait_for_timeout(200)
     await pg.locator("#mcard button", has_text="教它一項任務").click()
-    q = await pg.input_value("#q")
+    q = await pg.input_value("#q"); sheet = await pg.get_attribute("#teach", "class")
     await b.close(); await p.stop()
-    return q.startswith("教你一項任務：每天 ") and "我還沒送的字" in q, q
+    # 二版（10-24）：＋→教它一項任務＝開錄製面板；輸入框裡還沒送的字原封不動
+    return sheet == "on" and q == "我還沒送的字", (sheet, q)
+
+
+async def t_teach_record_flow():
+    """錄製面板：開始＝op teach act start 帶「想要的結果」；狀態列跟雲端狀態走（準備→錄製中有停止→學習中沒停止）；
+    停止＝op teach act stop；過時的狀態（Mac 3 分鐘沒接手）不顯示狀態列。"""
+    import datetime as dt
+    now = (dt.datetime.utcnow() + dt.timedelta(hours=8)).strftime("%Y-%m-%dT%H:%M:%S")
+    cur = {"t": None}
+    async def h(q, log):
+        if q.get("op") == "teach":
+            cur["t"] = {"sid": "s000000000001", "state": "start" if q.get("act") == "start" else "stop", "at": now}
+            return {"ok": True, "teach": cur["t"]}
+        if q.get("op") == "state":
+            return dict(STATE, chat=[], teach=cur["t"])
+        return await base(q, log)
+    fast5 = "(function(){var st=window.setTimeout;window.setTimeout=function(f,d){if(d===5000)d=60;return st.call(window,f,d);};})();"
+    p, b, pg, log = await page_with(h, fast=True, init=fast5)   # 錄製中輪詢 5 秒一次：縮短才看得到狀態列跟著變
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(800)
+    await pg.click("#plus"); await pg.wait_for_timeout(150)
+    await pg.locator("#mcard button", has_text="教它一項任務").click()
+    await pg.fill("#teachGoal", "每天祝壽星生日快樂"); await pg.click("#teachGo"); await pg.wait_for_timeout(300)
+    starts = [x for x in log if x.get("op") == "teach" and x.get("act") == "start"]
+    s1 = (await pg.get_attribute("#teachBar", "class"), await pg.text_content("#teachTxt"), await pg.get_attribute("#teach", "class"))
+    cur["t"] = dict(cur["t"], state="recording"); await pg.wait_for_timeout(400)
+    s2 = (await pg.text_content("#teachTxt"), await pg.is_visible("#teachStop"))
+    await pg.click("#teachStop"); await pg.wait_for_timeout(300)
+    stops = [x for x in log if x.get("op") == "teach" and x.get("act") == "stop"]
+    cur["t"] = dict(cur["t"], state="learning"); await pg.wait_for_timeout(400)
+    s3 = (await pg.text_content("#teachTxt"), await pg.is_visible("#teachStop"))
+    cur["t"] = dict(cur["t"], state="start", at="2020-01-01T00:00:00"); await pg.wait_for_timeout(400)
+    s4 = await pg.get_attribute("#teachBar", "class")
+    await b.close(); await p.stop()
+    ok = (len(starts) == 1 and starts[0].get("goal") == "每天祝壽星生日快樂" and s1[0] == "on" and "準備錄製" in s1[1] and s1[2] == ""
+          and "錄製中" in s2[0] and s2[1] and len(stops) == 1 and "學習" in s3[0] and not s3[1] and s4 == "")
+    return ok, (starts, s1, s2, len(stops), s3, s4)
 
 
 async def t_layout_class_survives_quote_cancel():
@@ -252,9 +288,9 @@ async def t_teach_during_pending_not_overwritten():
     await pg.click("#plus"); await pg.wait_for_timeout(150)
     await pg.locator("#mcard button", has_text="教它一項任務").click()
     gate.set(); await pg.wait_for_timeout(1200)
-    st = await pg.evaluate("({q:Q.value, unsent:UNSENT.map(function(x){return x.text})})")
+    st = await pg.evaluate("({q:Q.value, unsent:UNSENT.map(function(x){return x.text}), sheet:document.getElementById('teach').className})")
     await b.close(); await p.stop()
-    return st["q"].startswith("教你一項任務") and st["unsent"] == ["舊訊息"], st
+    return st["sheet"] == "on" and st["q"] == "" and st["unsent"] == ["舊訊息"], st
 
 
 async def t_line_banner_visible():
@@ -416,19 +452,20 @@ async def t07():
 async def _teach(pg):
     await pg.click("#plus"); await pg.wait_for_timeout(150)
     await pg.locator("#mcard button", has_text="教它一項任務").click(); await pg.wait_for_timeout(100)
+    await pg.click("#teachNo"); await pg.wait_for_timeout(50)   # 二版：開的是錄製面板，按取消關掉
 
 
 async def t08():
     p, b, pg, log = await _gated(_teach)
     c, u = await snap(pg); n = len(asks(log)); await done(p, b)
-    return c["text"].startswith(TEACH) and "文字a" not in c["text"] and [(x["text"], x["state"]) for x in u] == [("文字a", "unknown")] and n == 1, (c, u, n)
+    return c == E and [(x["text"], x["state"]) for x in u] == [("文字a", "unknown")] and n == 1, (c, u, n)
 
 
 async def t09():
     p, b, pg, log, ups = await mk(asker(["ok"]))
     await pg.evaluate(js_compose("b", "qB", IB) + "0;"); await _teach(pg); await _teach(pg)
     c, u = await snap(pg); n = len(asks(log)); await done(p, b)
-    return c == {"text": TEACH + "b", "quote": "qB", "img": B64} and u == [] and n == 0, (c, u, n)
+    return c == {"text": "b", "quote": "qB", "img": B64} and u == [] and n == 0, (c, u, n)
 
 
 async def t10():
@@ -745,7 +782,7 @@ async def t36():
         await pg.click("#tasks"); await pg.wait_for_timeout(100); await pg.click("#back"); await pg.evaluate("render(); 0;"); await pg.wait_for_timeout(100)
         c = await pg.evaluate(COMP)
         vis = await pg.evaluate("[document.getElementById('ap').getBoundingClientRect().height>0, document.getElementById('rq').getBoundingClientRect().height>0, document.getElementById('barbox').className]")
-        ok = c == {"text": TEACH + "x", "quote": q, "img": A64 if img else None} and vis[0] == bool(img) and vis[1] == bool(q) \
+        ok = c == {"text": "x", "quote": q, "img": A64 if img else None} and vis[0] == bool(img) and vis[1] == bool(q) \
             and ("att" in vis[2].split()) == bool(img) and ("quoting" in vis[2].split()) == bool(q)
         out.append((ok, c, vis))
     n = len(asks(log)); await done(p, b)
@@ -898,7 +935,7 @@ MATRIX = [t01, t02, t03, t04, t05, t06, t07, t08, t09, t10, t11, t12, t13, t14, 
           t21, t22, t23, t24, t25, t26, t27, t28, t29, t30, t31, t32, t33, t34, t35, t36, t37,
           t38, t39, t40, t41, t42, t43, t44, t45, t46, t47]
 EXISTING = [t_cid_reused_after_timeout, t_failure_keeps_new_draft_and_quote, t_stale_poll_does_not_drop_new_message,
-            t_teach_menu_keeps_draft, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
+            t_teach_menu_keeps_draft, t_teach_record_flow, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
             t_fail_after_typing_keeps_draft_and_unsent_full, t_fail_untouched_keeps_whole_message,
             t_type_then_clear_counts_as_touched, t_choices_show_despite_unsent, t_line_inapp_banner_390,
             t_draft_edit_store_intact, t_teach_during_pending_not_overwritten, t_line_banner_visible]

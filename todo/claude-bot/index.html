@@ -197,6 +197,25 @@
   #toast{position:fixed;left:50%;bottom:calc(96px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--solid);color:var(--on-solid);
          padding:9px 16px;border-radius:99px;font-size:15px;opacity:0;transition:opacity .2s;pointer-events:none;white-space:nowrap;z-index:6}
   #toast.on{opacity:1}
+  /* 教它一項任務（Grok Bot 實機：＋→教它一項任務→「錄下你執行任務的過程」＋開始錄製；錄製中有「停止」） */
+  #teachBar{position:fixed;left:12px;right:12px;top:64px;z-index:7;display:none;align-items:center;gap:10px;padding:10px 14px;
+    border-radius:16px;background:var(--fab);box-shadow:var(--shadow);font-size:15px}
+  #teachBar.on{display:flex}
+  #teachBar .dot{width:10px;height:10px;border-radius:50%;background:#dc2626;flex:none;animation:tbd 1.2s infinite}
+  @keyframes tbd{50%{opacity:.25}}
+  #teachBar span{flex:1;line-height:1.4}
+  #teachBar button{border:0;border-radius:99px;padding:7px 16px;background:var(--panel);color:var(--ink);font-size:15px;flex:none}
+  #teach{position:fixed;inset:0;z-index:10;display:none;background:rgba(0,0,0,.45);align-items:flex-end;justify-content:center}
+  #teach.on{display:flex}
+  #teach .sheet{width:min(560px,100%);box-sizing:border-box;background:var(--bg);border-radius:22px 22px 0 0;padding:20px 16px calc(18px + env(safe-area-inset-bottom))}
+  #teach h3{margin:0 0 6px;font-size:19px}
+  #teach p{margin:0 0 12px;color:var(--sub);font-size:15px;line-height:1.55}
+  #teach textarea{width:100%;box-sizing:border-box;min-height:84px;border-radius:14px;border:1px solid var(--line);padding:10px 12px;
+    font:inherit;font-size:16px;background:var(--field);color:var(--ink);resize:vertical}
+  #teach .row{display:flex;gap:10px;margin-top:12px}
+  #teach .row button{flex:1;border:0;border-radius:99px;padding:12px;font-size:16px;touch-action:manipulation}
+  #teach .go{background:#dc2626;color:#fff}
+  #teach .no{background:var(--panel);color:var(--ink)}
 </style>
 </head>
 <body>
@@ -213,6 +232,14 @@
 <main id="main"></main>
 <button class="fab down off" id="down" aria-label="捲到最新">
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+<div id="teachBar" role="status"><i class="dot"></i><span id="teachTxt"></span><button id="teachStop">停止</button></div>
+<div id="teach"><div class="sheet" role="dialog" aria-label="教它一項任務">
+  <h3>教它一項任務</h3>
+  <p>錄下你執行任務的過程。Claude Bot 會學習這些步驟，之後可以自行再次執行。<br>
+    會錄 Mac 上 Chrome 的畫面與點擊（最長 10 分鐘、不錄聲音、不讀密碼欄）；錄製中請不要輸入密碼。</p>
+  <textarea id="teachGoal" maxlength="300" placeholder="先說你想要的結果（例：每天早上到臉書，給今天生日的朋友送祝福）"></textarea>
+  <div class="row"><button class="no" id="teachNo">取消</button><button class="go" id="teachGo">開始錄製</button></div>
+</div></div>
 <div id="menu"><div class="card" id="mcard"></div></div>
 <div class="dock" id="dock"><div id="hd">讀取中…</div><div id="cn" class="cn"></div>
   <div class="bar" id="barbox"><div id="rq"><span id="rqt"></span><button class="x" id="rqx" aria-label="取消回覆">×</button></div><div id="ap"><img id="api" alt="要附的圖"><button class="x" id="apx" aria-label="取消附圖">×</button></div><button class="plus" id="plus" aria-label="附加圖片"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button><input type="file" id="file" accept="image/*" hidden><textarea id="q" rows="1" placeholder="傳訊息給 Claude Bot" aria-label="傳訊息給 Claude Bot"></textarea>
@@ -565,7 +592,8 @@ function renderTasks(m){
   list.appendChild(sw('auto_like','生日、喜事按讚','跟著每輪巡查・點開時當場按讚'));
   ((DATA.tasks && DATA.tasks.items) || []).forEach(function(t){
     var it = el('div','item'), tx = el('div','tx');
-    tx.appendChild(el('div',null,t.name)); tx.appendChild(el('small',null,'每天 '+(t.times||[]).join('、')+' 左右・'+t.prompt));
+    tx.appendChild(el('div',null,t.name + (t.kind === 'demo' ? '（示範學的）' : '')));
+    tx.appendChild(el('small',null,'每天 '+(t.times||[]).join('、')+' 左右・'+(t.auto ? '不用先問・' : '')+t.prompt));
     it.appendChild(tx);
     var b = el('button','sw'+(t.enabled!==false?' on':'')); b.setAttribute('role','switch'); b.setAttribute('aria-label',t.name);
     b.setAttribute('aria-checked', t.enabled!==false ? 'true' : 'false');
@@ -613,8 +641,48 @@ function render(){
   document.getElementById('ttl').textContent = VIEW==='tasks' ? '例行任務' : 'Claude Bot';
   if(!DATA){ m.appendChild(el('div','empty','讀取中…')); return; }
   if(VIEW==='tasks') renderTasks(m); else renderChat(m);
-  paintNote();
+  paintNote(); paintTeach();
 }
+
+// 教它一項任務：開始／停止寫 GAS；Mac 每 20 秒讀一次才接手錄製，所以狀態列跟著雲端狀態走（不自己假設已在錄）
+var TEACH_TXT = { start:'準備錄製…Mac 接手後才開始錄（約 20 秒），看到「錄製中」再開始做',
+  recording:'錄製中：請在 Mac 的 Chrome 上做一次，做完按停止', stop:'停止中…', learning:'正在學習你的步驟（幾分鐘），學好會貼在對話裡' };
+function teachLive(){
+  var t = DATA && DATA.teach; if(!t || !TEACH_TXT[t.state]) return null;
+  var age = Date.now() - new Date(String(t.at||'').replace(' ','T') + '+08:00').getTime();
+  return age < (t.state === 'start' ? 180000 : 2400000) ? t : null;   // 與雲端同門檻：3 分鐘沒接手／40 分鐘卡住＝不算進行中
+}
+function paintTeach(){
+  var t = teachLive(), b = document.getElementById('teachBar');
+  b.className = t ? 'on' : ''; if(!t) return;
+  document.getElementById('teachTxt').textContent = TEACH_TXT[t.state];
+  document.getElementById('teachStop').hidden = !(t.state === 'start' || t.state === 'recording');
+  b.querySelector('.dot').style.background = t.state === 'learning' ? '#d97757' : '#dc2626';
+}
+function openTeach(){
+  if(teachLive()){ toast('正在錄製或學習中，完成後再教下一項'); return; }
+  document.getElementById('teach').className = 'on'; document.getElementById('teachGoal').focus();
+}
+document.getElementById('teachNo').onclick = function(){ document.getElementById('teach').className = ''; };
+document.getElementById('teach').onclick = function(e){ if(e.target === this) this.className = ''; };
+document.getElementById('teachGo').onclick = async function(){
+  var b = this; b.disabled = true;
+  try{
+    var r = await api({op:'teach', act:'start', goal:document.getElementById('teachGoal').value.trim()});
+    if(r.teach && DATA) DATA.teach = r.teach;
+    if(!r.ok) toast(r.msg === 'recording' ? '已經有一場在錄製或學習中' : '沒開始成：' + r.msg);
+    else { document.getElementById('teach').className = ''; document.getElementById('teachGoal').value = ''; toast('Mac 接手後會顯示「錄製中」'); }
+    paintTeach(); poll();
+  }catch(e){ toast('連不上：' + (e.message || e)); }
+  finally{ b.disabled = false; }
+};
+document.getElementById('teachStop').onclick = async function(){
+  try{
+    var r = await api({op:'teach', act:'stop'});
+    if(r.teach && DATA) DATA.teach = r.teach;
+    paintTeach(); toast(r.teach && r.teach.state === 'cancel' ? '已取消' : '已停止，開始學習'); poll();
+  }catch(e){ toast('連不上：' + (e.message || e)); }
+};
 
 async function toggleTask(id){
   var cur = DATA.tasks || {rev:0, items:[]};
@@ -718,8 +786,7 @@ document.getElementById('plus').onclick = function(){
   var a = el('button','it'); a.innerHTML = ICON_IMG; a.appendChild(el('span',null,'附加圖片'));
   a.onclick = function(){ MENU.className=''; FILE.value=''; FILE.click(); };
   var t = el('button','it'); t.innerHTML = ICON_TEACH; t.appendChild(el('span',null,'教它一項任務'));
-  t.onclick = function(){ MENU.className=''; syncDom(); if(dispatch({type:'teach'}) === false) return; Q.focus(); Q.setSelectionRange(Q.value.length, Q.value.length);
-    toast('寫下幾點做、做什麼、整理成什麼樣子'); };
+  t.onclick = function(){ MENU.className=''; openTeach(); };   // 二版：錄下示範（打字教的「教你一項任務：每天…」照樣可用）
   MCARD.appendChild(a); MCARD.appendChild(t); MENU.className = 'on';
   MCARD.style.left = Math.max(12, r.left) + 'px'; MCARD.style.top = Math.max(12, r.top - MCARD.offsetHeight - 10) + 'px';
 };
@@ -928,7 +995,7 @@ function poll(){
       else if(!editing()){ var st = await api({op:'state'}); if(st.ok && fresh()){ SYNC.lastApplied = pid; var ch = st.chat; DATA = st; applyCloudChat(ch, true); render(); } }
     }catch(e){}
     poll();
-  }, (waiting() || hasUnknown()) ? 4000 : 30000);
+  }, (waiting() || hasUnknown()) ? 4000 : (teachLive() ? 5000 : 30000));   // 錄製／學習中 5 秒一次，狀態列才跟得上
 }
 document.addEventListener('visibilitychange', function(){ if(!document.hidden && TOKEN) poll(); });
 function bottom(){ window.scrollTo({top:document.body.scrollHeight, behavior:'smooth'}); }
