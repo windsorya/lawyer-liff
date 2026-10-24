@@ -1483,7 +1483,11 @@ async def t73():   # #4492②：錄製中等回覆時追加讀的 state 也要�
             return {"ok": True, "chat": [dict(BOT), pend]}   # 缺 work 欄＝這條讀取不可信
         return await base(q, log)
     p, b, pg, log = await page_with(h, fast=True)
-    await pg.goto("https://x.test/"); await pg.wait_for_timeout(2500)
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(1000)
+    try:   # 等到收斂（固定時間點取樣會落在「chat 剛記失敗、state 還沒回來」的空檔＝偶發紅，10-25 04:2x 全套實測 1/5）
+        await pg.wait_for_function("WORK && WORK.seq === 11 && WORK_FAIL_AT === 0", polling=50, timeout=8000)   # 定時輪詢；上限 8 秒：測試環境偶有單一請求卡幾秒（t72,t73 連跑時 fail 停在 ~1040ms），舊頁永遠不收斂照樣紅
+    except Exception:  # noqa: BLE001 — 逾時＝沒收斂，交給下面的斷言判紅
+        pass
     v = await pg.evaluate("({seq: WORK && WORK.seq, fail: WORK_FAIL_AT, live: !!teachLive()})")
     await done(p, b)
     return v["seq"] == 11 and v["fail"] == 0 and v["live"], v
@@ -1897,11 +1901,14 @@ async def t98():   # Codex 審 0537fb5 P1：回站還原後 LINE 說未登入 �
     await pg.click("#hd"); await pg.wait_for_timeout(300)
     await pg.evaluate("sessionStorage.setItem('__nologin','1'); 0")
     await pg.reload(); await pg.wait_for_timeout(800)
+    auto = await pg.evaluate("({n: window.__login.length, main: document.getElementById('main').innerText})")   # 縮範圍：不自動跳
+    await pg.click("#hd"); await pg.wait_for_timeout(300)
     v = await pg.evaluate("({login: window.__login, env: JSON.parse(sessionStorage.getItem('cb_carry_v1') || 'null')})")
     await done(p, b)
     env = v["env"] or {"msgs": []}
-    return ([m["snapshot"]["rawText"] for m in env["msgs"]] == ["要撐過兩次跳轉"] and len(v["login"]) == 1
-            and v["login"][0].get("redirectUri") == "https://x.test/"), v
+    return (auto["n"] == 0 and "點這一行重新登入" in auto["main"]
+            and [m["snapshot"]["rawText"] for m in env["msgs"]] == ["要撐過兩次跳轉"] and len(v["login"]) == 1
+            and v["login"][0].get("redirectUri") == "https://x.test/"), (auto, v)
 
 
 async def t99():   # Codex 審 0537fb5 P1：紀錄裡的計數器過舊（msgn:0）⇒ 新送的 mid 仍不得蓋掉還原回來的那則
@@ -1953,10 +1960,11 @@ async def t101():   # 4agent A1／Codex 50f9356 F1：回站還原後 LINE 說未
     await _carried_then(pg, c, "撐過存不回去")
     await pg.evaluate("sessionStorage.setItem('__nologin','1'); sessionStorage.setItem('__failset','1'); 0")
     await pg.reload(); await pg.wait_for_timeout(800)
-    v = await pg.evaluate("({login: window.__login.length, env: JSON.parse(sessionStorage.getItem('cb_carry_v1') || 'null')})")
+    await pg.click("#hd"); await pg.wait_for_timeout(300)   # 點了：暫存寫不進去 ⇒ 不跳
+    v = await pg.evaluate("({login: window.__login.length, hd: document.getElementById('hd').innerText, env: JSON.parse(sessionStorage.getItem('cb_carry_v1') || 'null')})")
     await done(p, b)
     env = v["env"] or {"msgs": []}
-    return v["login"] == 1 and [m["snapshot"]["rawText"] for m in env["msgs"]] == ["撐過存不回去"], v
+    return v["login"] == 0 and "暫存不下" in v["hd"] and [m["snapshot"]["rawText"] for m in env["msgs"]] == ["撐過存不回去"], v
 
 
 async def t102():   # Codex 50f9356 F2／F3：mid 超出本頁格式（l9007199254740992）、status 是陣列 ⇒ 整份不還原、隔離、不送
@@ -2034,7 +2042,7 @@ async def t106():   # Codex 審 d974c16 F1：還原後、等 LIFF 期間又打�
     await pg.wait_for_timeout(1800)
     v = await pg.evaluate("({login: window.__login.length, q: document.getElementById('q').value, main: document.getElementById('main').innerText})")
     await done(p, b)
-    return v["login"] == 0 and v["q"].endswith("＋新增重要內容") and "暫存不下" in v["main"], v
+    return v["login"] == 0 and v["q"].endswith("＋新增重要內容") and "點這一行重新登入" in v["main"], v
 
 
 async def t107():   # Codex 審 d974c16 F5：例行任務頁重登→回站仍未登入→再登入→回站 ⇒ 仍在例行任務頁；未登入直接開 #tasks 也一樣
@@ -2061,11 +2069,30 @@ async def t107():   # Codex 審 d974c16 F5：例行任務頁重登→回站仍�
     return (second["n"] == 1 and second["view"] == "tasks" and a == {"view": "tasks", "hash": "#tasks"}
             and nb == {"n": 1, "view": "tasks"} and b2 == {"view": "tasks", "hash": "#tasks"}), (second, a, nb, b2)
 
+
+async def t108():   # 縮範圍（Codex 審 e66c348 F1）：開頁未登入時正在選字／圖還在處理 ⇒ 不自動跳；點了也先擋（講原因），結束後點才跳
+    lj = liff_js(profile_ok=False).replace("isLoggedIn:()=>true", "isLoggedIn:()=>sessionStorage.getItem('__nologin')!=='1'")
+    out = []
+    for setup, word in (("COMPOSING = true", "正在選字"), ("COMPOSER.imageJobId = 3", "圖還在處理")):
+        c, p, b, pg, log = await _expired_page(liff=lj)
+        await _carried_then(pg, c, "帶回來的那則")
+        await pg.evaluate("sessionStorage.setItem('__nologin','1'); 0")
+        await pg.reload(); await pg.wait_for_timeout(800)
+        await pg.evaluate(setup + "; 0")
+        await pg.click("#hd"); await pg.wait_for_timeout(300)
+        mid = await pg.evaluate("({n: window.__login.length, hd: document.getElementById('hd').innerText})")
+        await pg.evaluate("COMPOSING = false; COMPOSER.imageJobId = 0; 0")
+        await pg.click("#hd"); await pg.wait_for_timeout(300)
+        end = await pg.evaluate("({n: window.__login.length, env: JSON.parse(sessionStorage.getItem('cb_carry_v1') || 'null')})")
+        await done(p, b)
+        out.append((word, mid, end["n"], [m["snapshot"]["rawText"] for m in (end["env"] or {"msgs": []})["msgs"]]))
+    return all(m["n"] == 0 and w in m["hd"] and n == 1 and t == ["帶回來的那則"] for w, m, n, t in out), out
+
 MATRIX = [t01, t02, t03, t04, t05, t06, t07, t08, t09, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20,
           t21, t22, t23, t24, t25, t26, t27, t28, t29, t30, t31, t32, t33, t34, t35, t36, t37,
           t38, t39, t40, t41, t42, t43, t44, t45, t46, t47, t48, t49, t50, t51, t52, t53, t54, t55, t56, t57, t58, t59, t60, t61, t62, t63, t64,
           t65, t66, t67, t68, t69, t70, t71, t72, t73, t74, t75, t76, t77, t78, t79, t80, t81, t82, t83, t84, t85,
-          t86, t87, t88, t89, t90, t91, t92, t93, t94, t95, t96, t97, t98, t99, t100, t101, t102, t103, t104, t105, t106, t107]
+          t86, t87, t88, t89, t90, t91, t92, t93, t94, t95, t96, t97, t98, t99, t100, t101, t102, t103, t104, t105, t106, t107, t108]
 EXISTING = [t_cid_reused_after_timeout, t_failure_keeps_new_draft_and_quote, t_stale_poll_does_not_drop_new_message,
             t_teach_menu_keeps_draft, t_teach_record_flow, t_teach_review_84b793d, t_teach_out_of_order, t_teach_stop_response_late, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
             t_fail_after_typing_keeps_draft_and_unsent_full, t_fail_untouched_keeps_whole_message,
