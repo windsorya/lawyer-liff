@@ -1268,6 +1268,7 @@ function carryEnvelope(){
 }
 /** 存好並讀回核對一致才回 true；什麼都沒有就清掉舊紀錄。 */
 function carrySave(){
+  if(CARRY_BAD) return false;   // 主鍵上還壓著讀不出來、也搬不走的舊紀錄：寧可不跳，也不覆蓋它
   try{
     var env = carryEnvelope(), c = env.composer;
     if(!env.msgs.length && c.rawText === '' && !c.quote && !c.asset){ sessionStorage.removeItem(CARRY_KEY); return true; }   // 只有空白也算內容（不 trim）
@@ -1275,27 +1276,42 @@ function carrySave(){
     return sessionStorage.getItem(CARRY_KEY) === s;
   }catch(e){ return false; }
 }
+var CARRY_STATUS = {unknown:1, rejected:1, uploadFailed:1, accepted:1, sending:1, 'new':1}, CARRY_BAD = false;
+function cNat(v){ return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0; }
+function cStrOrNull(v){ return v === null || typeof v === 'string'; }
+/** 整份逐欄位驗：型別、狀態白名單、關聯都對得上才還原；任何一處不對就整份不還原（Codex 審 0537fb5：counters:{}、status:"corrupt" 都曾通過）。 */
 function carryValid(e){
-  if(!e || e.v !== 1 || !Array.isArray(e.msgs) || !e.composer || typeof e.composer.rawText !== 'string' || !e.counters || !e.assets || typeof e.assets !== 'object') return false;
-  var ids = {};
+  if(!e || e.v !== 1 || !Array.isArray(e.msgs) || !e.composer || !e.counters || !e.assets || typeof e.assets !== 'object' || Array.isArray(e.assets)) return false;
+  var c = e.composer, k = e.counters, ids = {};
+  if(typeof c.rawText !== 'string' || !cStrOrNull(c.quote) || !cStrOrNull(c.originMid) || !cStrOrNull(c.asset)) return false;
+  if(!cNat(k.msgn) || !cNat(k.attseq) || !cNat(k.draftn)) return false;
+  var assetsOk = Object.keys(e.assets).every(function(id){ var a = e.assets[id];
+    return a && typeof a.b64 === 'string' && a.b64 !== '' && typeof a.mime === 'string' && a.mime.indexOf('image/') === 0; });
+  if(!assetsOk) return false;
   for(var i = 0; i < e.msgs.length; i++){
-    var m = e.msgs[i];
-    if(!m || typeof m.mid !== 'string' || ids[m.mid] || !m.snapshot || typeof m.snapshot.rawText !== 'string' || typeof m.snapshot.wireText !== 'string'
-       || !Array.isArray(m.attempts) || typeof m.status !== 'string') return false;
-    if(m.snapshot.asset && !e.assets[m.snapshot.asset]) return false;
-    if(!m.attempts.every(function(a){ return a && typeof a.cid === 'string' && typeof a.attemptId === 'number'; })) return false;
+    var m = e.msgs[i], s = m && m.snapshot;
+    if(!m || typeof m.mid !== 'string' || !m.mid || ids[m.mid] || CARRY_STATUS[m.status] !== 1 || !cNat(m.order) || typeof m.at !== 'string' || typeof m.why !== 'string'
+       || typeof m.putBack !== 'boolean' || typeof m.seenInCloud !== 'boolean' || !cStrOrNull(m.acceptedCid) || !cStrOrNull(m.replyAnchorId)) return false;
+    if(m.status === 'accepted' && !m.acceptedCid) return false;
+    if(!s || typeof s.rawText !== 'string' || typeof s.wireText !== 'string' || typeof s.quote !== 'string' || !s.refs || typeof s.refs !== 'object'
+       || !cStrOrNull(s.asset) || (s.asset !== null && !e.assets[s.asset])) return false;
+    if(!Array.isArray(m.attempts) || (m.status !== 'new' && !m.attempts.length)) return false;   // 要能重試就得有送出紀錄
+    if(!m.attempts.every(function(a){ return a && cNat(a.attemptId) && typeof a.cid === 'string' && a.cid !== '' && typeof a.phase === 'string'
+         && typeof a.askIssued === 'boolean' && typeof a.attId === 'string' && (a.outcome === null || CARRY_STATUS[a.outcome] === 1); })) return false;
     ids[m.mid] = 1;
   }
-  if(e.composer.asset && !e.assets[e.composer.asset]) return false;
-  if(e.composer.originMid && !ids[e.composer.originMid]) return false;
-  return Object.keys(e.assets).every(function(k){ var a = e.assets[k]; return a && typeof a.b64 === 'string' && typeof a.mime === 'string'; });
+  if(c.asset !== null && !e.assets[c.asset]) return false;
+  if(c.originMid !== null && !ids[c.originMid]) return false;
+  return true;
 }
 /** 頁面一開就同步還原（在等 LIFF／雲端之前，律師還來不及打字）；格式不對就整份不還原、紀錄留著、不自動送任何東西。 */
 function carryRestore(){
   var raw = null; try{ raw = sessionStorage.getItem(CARRY_KEY); }catch(e){}
   if(raw === null){ legacyKeep(); return; }
   var env = null; try{ env = JSON.parse(raw); }catch(e){}
-  if(!carryValid(env)){ CARRY_NOTE = '上次重新登入前暫存的訊息讀不出來，沒有放回（紀錄還留著）'; return; }
+  if(!carryValid(env)){   // 不部分還原；原文搬到隔離鍵保存，之後的暫存不會覆蓋或刪掉它（Codex 審 0537fb5 P2）
+    try{ sessionStorage.setItem('cb_carry_bad', raw); if(sessionStorage.getItem('cb_carry_bad') === raw) sessionStorage.removeItem(CARRY_KEY); else CARRY_BAD = true; }catch(e){ CARRY_BAD = true; }
+    CARRY_NOTE = '上次重新登入前暫存的訊息讀不出來，沒有放回（原紀錄另外保存著）'; return; }
   var objs = {};
   Object.keys(env.assets).forEach(function(k){ var a = env.assets[k]; objs[k] = Object.freeze({url:'data:'+a.mime+';base64,'+a.b64, b64:a.b64, mime:a.mime}); });
   env.msgs.forEach(function(m){
@@ -1306,7 +1322,10 @@ function carryRestore(){
       putBack:m.putBack, acceptedCid:m.acceptedCid || undefined, seenInCloud:m.seenInCloud};
     if(asset) m.attempts.forEach(function(a){ if(a.askIssued) LOCALIMG['m'+a.cid] = asset.url; });
   });
-  MSGN = Math.max(MSGN, env.counters.msgn | 0); ATTSEQ = Math.max(ATTSEQ, env.counters.attseq | 0); freshComposer.n = Math.max(freshComposer.n, env.counters.draftn | 0);
+  // 高水位取「紀錄的計數器」與「資料本身最大值」較大者：新訊息的 mid／attemptId 不會撞到還原回來的（Codex 審 0537fb5 P1）
+  var mx = env.counters.msgn, ax = env.counters.attseq;
+  env.msgs.forEach(function(m){ var g = /^l(\d+)$/.exec(m.mid); mx = Math.max(mx, m.order, g ? +g[1] : 0); m.attempts.forEach(function(a){ ax = Math.max(ax, a.attemptId); }); });
+  MSGN = Math.max(MSGN, mx); ATTSEQ = Math.max(ATTSEQ, ax); freshComposer.n = Math.max(freshComposer.n, env.counters.draftn);
   var c = env.composer;
   COMPOSER = {draftId:++freshComposer.n, rev:0, rawText:c.rawText, quote:c.quote || null, asset:c.asset ? objs[c.asset] : null, imageJobId:0, originMid:c.originMid || null};
   paintComposer();
@@ -1411,7 +1430,7 @@ carryRestore();   // 同步、在等 LINE／雲端之前：重新登入跳轉帶
 (async function(){
   try{ await liff.init({liffId:LIFF_ID}); }
   catch(e){ document.getElementById('hd').textContent='LIFF 初始化失敗：'+(e.message||e); return; }
-  if(!liff.isLoggedIn()){ liff.login(); return; }
+  if(!liff.isLoggedIn()){ carrySave(); liff.login({redirectUri: location.origin + location.pathname}); return; }   // 剛還原的訊息先存回去再跳（Codex 審 0537fb5 P1）；跳回本頁
   if(/ Line\//i.test(navigator.userAgent)){   // LINE 內建瀏覽器沒有「加入主畫面」（10-24 律師實測）；openExternalBrowser=1 是 LINE 官方的外開參數
     var bar = el('div', null, '在 LINE 裡開的頁面不能「加入主畫面」。'), topH = (document.querySelector('.top') || {}).offsetHeight || 56;
     bar.id = 'inapp';   // 固定在頂欄正下方、層級高於頂欄（Codex 審 ab0695a：放在頁首會被固定頂欄蓋住）

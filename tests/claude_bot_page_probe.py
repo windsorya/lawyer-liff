@@ -1841,14 +1841,17 @@ async def t94():   # T17：只有空白／只有引用 ⇒ 也算內容，原樣
     return all(a["raw"] == bf["raw"] and a["quote"] == bf["quote"] for bf, a in out) and out[1][1]["quote"] == "只有引用", out
 
 
-async def t95():   # T18：暫存紀錄壞掉（不是 JSON）⇒ 不部分還原、紀錄保留、不自動送出，頁面照常載入
+async def t95():   # T18：暫存紀錄壞掉（不是 JSON）⇒ 不部分還原、原紀錄搬到隔離鍵保存、不自動送出；之後自動重登也不會刪掉它（Codex 審 0537fb5 P2）
     seed = "if(!sessionStorage.getItem('__seeded')){ sessionStorage.setItem('__seeded','1'); sessionStorage.setItem('cb_carry_v1','{bad'); }"
     c, h = _cloud()
-    p, b, pg, log = await page_with(h, init=seed)
+    p, b, pg, log = await page_with(h, init=seed, liff=liff_js(profile_ok=False))
     await pg.goto("https://x.test/"); await pg.wait_for_timeout(1000)
-    v = await pg.evaluate("({n: msgList().length, left: sessionStorage.getItem('cb_carry_v1'), d: !!DATA, q: document.getElementById('q').value})")
+    v = await pg.evaluate("({n: msgList().length, bad: sessionStorage.getItem('cb_carry_bad'), d: !!DATA, q: document.getElementById('q').value})")
+    c["mode"] = "forbidden"; await pg.evaluate("kick(true); 0"); await pg.wait_for_timeout(600)   # 空模型＋登入過期 ⇒ 自動重登
+    v2 = await pg.evaluate("({login: window.__login.length, bad: sessionStorage.getItem('cb_carry_bad')})")
     await done(p, b)
-    return v["n"] == 0 and v["left"] == "{bad" and v["d"] and v["q"] == "" and not _asks(log), v
+    return (v["n"] == 0 and v["bad"] == "{bad" and v["d"] and v["q"] == "" and not _asks(log)
+            and v2["login"] == 1 and v2["bad"] == "{bad"), (v, v2)
 
 
 async def t96():   # T11／T12：附圖那則送不成→放回→重登回來 ⇒ 圖原樣（同一個圖物件＝判為原樣）、原樣送出沿用 cid 與已上傳的附件、不重傳圖
@@ -1884,11 +1887,57 @@ async def t97():   # T19：LINE 內建瀏覽器走 logout＋reload ⇒ 同一套
     k = lambda m: [(x["mid"], x["text"], x["cids"]) for x in m["msgs"]]
     return k(after) == k(before) and len(before["msgs"]) == 1 and url_ok.startswith("https://x.test/"), (before, after)
 
+
+async def t98():   # Codex 審 0537fb5 P1：回站還原後 LINE 說未登入 ⇒ 跳去登入前把剛還原的訊息再存一次（不然下一頁沒東西可還原）
+    lj = liff_js(profile_ok=False).replace("isLoggedIn:()=>true", "isLoggedIn:()=>sessionStorage.getItem('__nologin')!=='1'")
+    c, p, b, pg, log = await _expired_page(liff=lj)
+    await _send(pg, "要撐過兩次跳轉")
+    await pg.evaluate("kick(true); 0"); await pg.wait_for_timeout(500)
+    await pg.click("#hd"); await pg.wait_for_timeout(300)
+    await pg.evaluate("sessionStorage.setItem('__nologin','1'); 0")
+    await pg.reload(); await pg.wait_for_timeout(800)
+    v = await pg.evaluate("({login: window.__login, env: JSON.parse(sessionStorage.getItem('cb_carry_v1') || 'null')})")
+    await done(p, b)
+    env = v["env"] or {"msgs": []}
+    return ([m["snapshot"]["rawText"] for m in env["msgs"]] == ["要撐過兩次跳轉"] and len(v["login"]) == 1
+            and v["login"][0].get("redirectUri") == "https://x.test/"), v
+
+
+async def t99():   # Codex 審 0537fb5 P1：紀錄裡的計數器過舊（msgn:0）⇒ 新送的 mid 仍不得蓋掉還原回來的那則
+    c, p, b, pg, log = await _expired_page()
+    await _send(pg, "還原回來的第一則")
+    await pg.evaluate("kick(true); 0"); await pg.wait_for_timeout(500)
+    await pg.click("#hd"); await pg.wait_for_timeout(300)
+    await pg.evaluate("(function(){ var e = JSON.parse(sessionStorage.getItem('cb_carry_v1')); e.counters.msgn = 0; e.counters.attseq = 0; sessionStorage.setItem('cb_carry_v1', JSON.stringify(e)); })()")
+    c["mode"] = "ok"
+    await pg.reload(); await pg.wait_for_timeout(1300)
+    await _send(pg, "新的第二則")
+    v = await pg.evaluate("msgList().map(function(m){ return [m.mid, m.snapshot.rawText, m.attempts.map(function(a){ return a.attemptId; })]; })")
+    await done(p, b)
+    mids = [x[0] for x in v]; atts = [a for x in v for a in x[2]]
+    return len(v) == 2 and len(set(mids)) == 2 and len(set(atts)) == len(atts) and "還原回來的第一則" in [x[1] for x in v], v
+
+
+async def t100():   # Codex 審 0537fb5 P2：狀態被竄改（"corrupt"）或計數器缺欄 ⇒ 整份不還原、搬到隔離鍵、不送任何東西
+    out = []
+    for mut in ("e.msgs[0].status = 'corrupt'", "e.counters = {}"):
+        c, p, b, pg, log = await _expired_page()
+        await _send(pg, "會被竄改的紀錄")
+        await pg.evaluate("kick(true); 0"); await pg.wait_for_timeout(500)
+        await pg.click("#hd"); await pg.wait_for_timeout(300)
+        await pg.evaluate("(function(){ var e = JSON.parse(sessionStorage.getItem('cb_carry_v1')); %s; sessionStorage.setItem('cb_carry_v1', JSON.stringify(e)); })()" % mut)
+        c["mode"] = "ok"; n0 = len(_asks(log))
+        await pg.reload(); await pg.wait_for_timeout(1300)
+        v = await pg.evaluate("({n: msgList().length, main: sessionStorage.getItem('cb_carry_v1'), bad: !!sessionStorage.getItem('cb_carry_bad'), q: document.getElementById('q').value})")
+        await done(p, b)
+        out.append((mut, v, len(_asks(log)) - n0))
+    return all(v["n"] == 0 and v["main"] is None and v["bad"] and v["q"] == "" and k == 0 for _, v, k in out), out
+
 MATRIX = [t01, t02, t03, t04, t05, t06, t07, t08, t09, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20,
           t21, t22, t23, t24, t25, t26, t27, t28, t29, t30, t31, t32, t33, t34, t35, t36, t37,
           t38, t39, t40, t41, t42, t43, t44, t45, t46, t47, t48, t49, t50, t51, t52, t53, t54, t55, t56, t57, t58, t59, t60, t61, t62, t63, t64,
           t65, t66, t67, t68, t69, t70, t71, t72, t73, t74, t75, t76, t77, t78, t79, t80, t81, t82, t83, t84, t85,
-          t86, t87, t88, t89, t90, t91, t92, t93, t94, t95, t96, t97]
+          t86, t87, t88, t89, t90, t91, t92, t93, t94, t95, t96, t97, t98, t99, t100]
 EXISTING = [t_cid_reused_after_timeout, t_failure_keeps_new_draft_and_quote, t_stale_poll_does_not_drop_new_message,
             t_teach_menu_keeps_draft, t_teach_record_flow, t_teach_review_84b793d, t_teach_out_of_order, t_teach_stop_response_late, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
             t_fail_after_typing_keeps_draft_and_unsent_full, t_fail_untouched_keeps_whole_message,
