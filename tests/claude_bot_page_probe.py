@@ -2089,7 +2089,7 @@ async def t108():   # 縮範圍（Codex 審 e66c348 F1）：開頁未登入時�
     return all(m["n"] == 0 and w in m["hd"] and n == 1 and t == ["帶回來的那則"] for w, m, n, t in out), out
 
 # ── 律師 10-25 09:49「為何我每次滑到底看對話沒多久，就會畫面自動置中？」──
-# 真實雲端狀態（7 輪、9 張草稿框、114 則）重現：輪詢重畫當下整頁矮 1,440 像素，停在最底下被往上夾；iPhone Safari 沒有捲動錨定
+# 真實雲端狀態（7 輪、20 張草稿框＝巡查卡 8＋回答草稿 12、114 則）重現：輪詢重畫當下整頁矮 1,440 像素，停在最底下被往上夾；iPhone Safari 沒有捲動錨定
 # （caniuse css-overflow-anchor：iOS 到 26.4 不支援）所以回不來。無頭 Chromium／WebKit 有錨定會補回去 ⇒ 測試一律關掉錨定模擬 iPhone，
 # 並在重畫後強制排版一拍（真機在重畫與下一個計時器之間會畫一幀；無頭瀏覽器不一定）。
 IOS_NOANCHOR = ("document.addEventListener('DOMContentLoaded',function(){var s=document.createElement('style');"
