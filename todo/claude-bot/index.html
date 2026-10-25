@@ -350,11 +350,41 @@ function renderRound(m, key, r){
     box.appendChild(mu);
   }
   if(opened.length){
-    var det = el('details'); det.appendChild(el('summary',null,'點開的聊天室（'+opened.length+'）'));
+    var det = keepOpen(el('details'), 'op:'+key); det.appendChild(el('summary',null,'點開的聊天室（'+opened.length+'）'));
     var ul = el('ul','bul'); opened.forEach(function(o){ ul.appendChild(el('li',null,o.name)); });
     det.appendChild(ul); box.appendChild(det);
   }
   m.appendChild(turn);
+}
+
+// ── 重畫不得讓畫面跳走（律師 10-25 09:49：「為何我每次滑到底看對話沒多久，就會畫面自動置中？」）──
+// 根因：輪詢每 10～30 秒整頁重畫，新建的草稿框是預設高度、要等下一拍才撐開（真實資料 9 張框＝整頁瞬間矮 1,440 像素）；
+// 停在最底下時瀏覽器把捲動位置往上夾，iPhone Safari 沒有捲動錨定（caniuse css-overflow-anchor：iOS 到 26.4 都不支援），夾掉就回不來。
+// 修法：重畫期間釘住對話區高度、畫完當下就撐好草稿框（fitAll）；單框量高度時釘住外框（fitTa）；點開的清單與附圖高度跨重畫保留。
+function fitBox(ta){ ta.setAttribute('data-fit', ''); return ta; }
+/** 單一草稿框依內容撐高（打字時）：量的那一瞬間框會縮回預設高，先釘住外框，整頁才不會變矮。 */
+function fitTa(ta){
+  if(!ta.isConnected) return;
+  var c = ta.parentNode; c.style.minHeight = c.offsetHeight + 'px';
+  ta.style.height = 'auto'; ta.style.height = (ta.scrollHeight + 2) + 'px';
+  c.style.minHeight = '';
+}
+/** 重畫當下一次撐好全部草稿框（先全部歸零、再一起量、再一起寫：只排版一次）；呼叫端已釘住對話區高度。 */
+function fitAll(root){
+  var tas = Array.prototype.slice.call(root.querySelectorAll('textarea[data-fit]'));
+  tas.forEach(function(t){ t.style.height = 'auto'; });
+  var hs = tas.map(function(t){ return t.scrollHeight; });
+  tas.forEach(function(t, i){ t.style.height = (hs[i] + 2) + 'px'; });
+}
+var OPEN_DET = {};   // 律師點開的清單：重畫後保持點開（舊版每次輪詢都收回去，下面的內容跟著往上縮）
+function keepOpen(det, k){ det.setAttribute('data-k', k); det.open = !!OPEN_DET[k]; return det; }
+/** 重畫前直接讀畫面上哪些清單是開的（不等 toggle 事件：它晚一拍才到，點完馬上重畫就漏記）。 */
+function rememberOpen(root){ Array.prototype.forEach.call(root.querySelectorAll('details[data-k]'), function(d){ OPEN_DET[d.getAttribute('data-k')] = d.open; }); }
+var IMG_H = {};   // 自己附的圖：記住上次畫出來的高度，重畫時先預留（新的 img 解碼完之前是 0 高）
+function localImg(mi, url){
+  var im = el('img'); im.alt = '你附的圖'; if(IMG_H[url]) mi.style.minHeight = IMG_H[url] + 'px';
+  im.onload = function(){ if(im.offsetHeight) IMG_H[url] = im.offsetHeight; mi.style.minHeight = ''; };
+  im.src = url; mi.appendChild(im);
 }
 
 function draftCard(d){
@@ -363,12 +393,11 @@ function draftCard(d){
   if(NUM[d.card_id] && !d.decision) to.appendChild(el('span','num',String(NUM[d.card_id])));
   to.appendChild(document.createTextNode('給 '+d.chat)); c.appendChild(to);
   if(d.head) c.appendChild(el('div','quote',d.head));
-  var ta = el('textarea'); ta.value = EDITS[d.card_id] != null ? EDITS[d.card_id] : (d.draft||'');
+  var ta = fitBox(el('textarea')); ta.value = EDITS[d.card_id] != null ? EDITS[d.card_id] : (d.draft||'');
   ta.setAttribute('aria-label','回覆草稿（可直接修改）');
-  function fit(){ ta.style.height='auto'; ta.style.height=(ta.scrollHeight+2)+'px'; }
   var note = el('div','edited','');
-  ta.oninput = function(){ EDITS[d.card_id] = ta.value; fit(); note.textContent = ta.value !== d.draft ? '已修改（複製的是你改過的版本）' : ''; };
-  c.appendChild(ta); c.appendChild(note); setTimeout(fit,0);
+  ta.oninput = function(){ EDITS[d.card_id] = ta.value; fitTa(ta); note.textContent = ta.value !== d.draft ? '已修改（複製的是你改過的版本）' : ''; };
+  c.appendChild(ta); c.appendChild(note);
   if(ta.value !== d.draft) note.textContent = '已修改（複製的是你改過的版本）';
   if(d.decision){
     var done = el('div','done'+(d.decision==='ok'?'':' no'));
@@ -398,7 +427,7 @@ function renderChat(m){
   var quiet = keys.filter(function(k){ return !(st.rounds[k].drafts||[]).length && done(k); });
   var loud = keys.filter(function(k){ return quiet.indexOf(k) < 0; });
   if(quiet.length){
-    var det = el('details','fold');
+    var det = keepOpen(el('details','fold'), 'fold');
     var seen = quiet.reduce(function(a,k){ return a + ((st.rounds[k].opened||[]).length || st.rounds[k].opened_count || 0); }, 0);
     det.appendChild(el('summary',null,'另外 '+quiet.length+' 輪沒有需要你回的（共看了 '+seen+' 間）'));
     quiet.forEach(function(k){ renderRound(det, k, st.rounds[k]); });
@@ -602,7 +631,7 @@ function renderMsg(m, x){
   if(x.role === 'me'){
     if(x.quote) m.appendChild(el('div','meq','↩ '+x.quote));
     if(x.att){ var mi = el('div','meimg');
-      if(LOCALIMG[x.id]){ var im = el('img'); im.src = LOCALIMG[x.id]; im.alt = '你附的圖'; mi.appendChild(im); }
+      if(LOCALIMG[x.id]) localImg(mi, LOCALIMG[x.id]);
       else mi.appendChild(el('span',null,'🖼 附了一張圖'));
       m.appendChild(mi); }
     var w = el('div','me'), b = el('div'); b.textContent = x.text;
@@ -665,7 +694,7 @@ function renderPending(m){
   pendingList().forEach(function(p){
     var s = p.snapshot;
     if(s.quote) m.appendChild(el('div','meq','↩ '+s.quote));
-    if(s.asset){ var mi = el('div','meimg'), im = el('img'); im.src = s.asset.url; im.alt = '你附的圖'; mi.appendChild(im); m.appendChild(mi); }
+    if(s.asset){ var mi = el('div','meimg'); localImg(mi, s.asset.url); m.appendChild(mi); }
     var w = el('div','me pend'), b = el('div'); b.textContent = s.rawText;
     bindMenu(b, {text:s.rawText}); w.appendChild(b); m.appendChild(w);
     var u = el('div','turn'), ub = el('div','msg think pendbox');
@@ -683,9 +712,8 @@ function renderPending(m){
 function replyDraft(d, key){
   var c = el('div','card');
   if(d.to) c.appendChild(el('div','to','給 '+d.to));
-  var ta = el('textarea'); ta.value = EDITS[key] != null ? EDITS[key] : d.text; ta.setAttribute('aria-label','草稿（可直接修改）');
-  function fit(){ ta.style.height='auto'; ta.style.height=(ta.scrollHeight+2)+'px'; }
-  ta.oninput = function(){ EDITS[key] = ta.value; fit(); }; setTimeout(fit,0);
+  var ta = fitBox(el('textarea')); ta.value = EDITS[key] != null ? EDITS[key] : d.text; ta.setAttribute('aria-label','草稿（可直接修改）');
+  ta.oninput = function(){ EDITS[key] = ta.value; fitTa(ta); };
   c.appendChild(ta);
   var acts = el('div','acts'), cp = el('button','pill main','複製');
   cp.onclick = function(){ copyText(ta.value, function(ok){ toast(ok ? '已複製，到 LINE 貼上即可' : '複製失敗，請長按文字複製'); }); };
@@ -776,7 +804,13 @@ function header(){
 }
 
 function render(){
-  var m = document.getElementById('main'); m.textContent='';
+  var m = document.getElementById('main');
+  m.style.minHeight = m.offsetHeight + 'px';   // 重畫期間整頁不准變矮（停在最底下才不會被往上夾）；畫完、草稿框撐好就放開
+  rememberOpen(m);
+  try{ renderMain(m); } finally { fitAll(m); m.style.minHeight = ''; }
+}
+function renderMain(m){
+  m.textContent='';
   if(DATA){ numberDrafts(); header(); }   // 待回數每次重繪都重算（Codex 審 b75099a9：按完頁首還寫 1 則待回）
   document.getElementById('dock').className = 'dock' + (VIEW==='tasks' ? ' hide' : '');
   document.getElementById('back').hidden = VIEW!=='tasks';

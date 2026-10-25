@@ -2088,11 +2088,133 @@ async def t108():   # 縮範圍（Codex 審 e66c348 F1）：開頁未登入時�
         out.append((word, mid, end["n"], [m["snapshot"]["rawText"] for m in (end["env"] or {"msgs": []})["msgs"]]))
     return all(m["n"] == 0 and w in m["hd"] and n == 1 and t == ["帶回來的那則"] for w, m, n, t in out), out
 
+# ── 律師 10-25 09:49「為何我每次滑到底看對話沒多久，就會畫面自動置中？」──
+# 真實雲端狀態（7 輪、9 張草稿框、114 則）重現：輪詢重畫當下整頁矮 1,440 像素，停在最底下被往上夾；iPhone Safari 沒有捲動錨定
+# （caniuse css-overflow-anchor：iOS 到 26.4 不支援）所以回不來。無頭 Chromium／WebKit 有錨定會補回去 ⇒ 測試一律關掉錨定模擬 iPhone，
+# 並在重畫後強制排版一拍（真機在重畫與下一個計時器之間會畫一幀；無頭瀏覽器不一定）。
+IOS_NOANCHOR = ("document.addEventListener('DOMContentLoaded',function(){var s=document.createElement('style');"
+                "s.textContent='*{overflow-anchor:none!important}';document.head.appendChild(s);});")
+FRAME_AFTER_RENDER = ("window.__h=[]; var __R0 = render; render = function(){ var h0 = document.body.scrollHeight;"
+                      " __R0.apply(this, arguments); window.__h.push([h0, document.body.scrollHeight]); }; 0")
+GAP = "Math.round(document.body.scrollHeight - (window.scrollY + window.innerHeight))"
+
+
+def _long_state(n_rounds=4, n_chat=30):
+    """形狀照真實狀態：每輪有點開清單與多行草稿卡、對話裡夾帶回答草稿（合成內容，不含任何真實資料）。"""
+    rounds = {}
+    for i in range(n_rounds):
+        rounds[f"{10 + i}:00"] = {"at": f"2026-10-24T{10 + i}:00:00", "result": "done", "opened": [{"name": f"群{i}{j}"} for j in range(3)],
+                                  "drafts": [{"card_id": f"c{i}{j}", "chat": f"對象{i}{j}", "head": "原話",
+                                              "draft": "\n".join(f"第{k}行草稿內容，長度足以折行的一段文字" for k in range(6))} for j in range(2)]}
+    chat = []
+    for i in range(n_chat):
+        t = f"2026-10-24T15:{i:02d}:00"
+        if i % 2 == 0:
+            chat.append({"id": f"m{i}", "role": "me", "text": f"問題 {i}", "status": "answered", "at": t})
+        else:
+            x = {"id": f"b{i}", "role": "bot", "text": "\n".join(f"回答第 {i} 則的第 {k} 行" for k in range(5)), "at": t}
+            if i % 6 == 1:
+                x["drafts"] = [{"to": "某人", "text": "\n".join(f"草稿第{k}行" for k in range(8))}]
+            chat.append(x)
+    return {"day": "2026-10-24", "rounds": rounds}, chat
+
+
+def _states(log):
+    return sum(1 for x in log if x.get("op") == "state")
+
+
+async def t109():   # 停在最底下（iPhone：無捲動錨定）⇒ 幾輪輪詢重畫後仍在最底；重畫當下頁面高度不得變矮
+    st, ch = _long_state()
+    async def h(q, log):
+        if q.get("op") == "state": return dict(STATE, state=st, chat=ch)
+        return await base(q, log, chat=ch)
+    p, b, pg, log = await page_with(h, fast=True, init=IOS_NOANCHOR)
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(800)
+    await pg.evaluate(FRAME_AFTER_RENDER)
+    await pg.evaluate("window.scrollTo(0, document.body.scrollHeight); 0"); await pg.wait_for_timeout(100)
+    g0, n0 = await pg.evaluate(GAP), _states(log)
+    await pg.wait_for_timeout(1500)
+    g1, n1, hs = await pg.evaluate(GAP), _states(log), await pg.evaluate("window.__h")
+    await done(p, b)
+    return g0 <= 2 and g1 <= 2 and n1 - n0 >= 3 and len(hs) >= 3 and all(x == y for x, y in hs), (g0, g1, n1 - n0, hs[:3])
+
+
+async def t110():   # 停在最底下改最後一張草稿：每打一字都重量框高，量的那一瞬間整頁不得變矮（不然每打一字就往上跳）
+    st, ch = _long_state()
+    ch = ch + [{"id": "blast", "role": "bot", "text": "最後一則", "at": "2026-10-24T18:00:00",
+                "drafts": [{"to": "某人", "text": "\n".join(f"末稿第{k}行" for k in range(10))}]}]
+    async def h(q, log):
+        if q.get("op") == "state": return dict(STATE, state=st, chat=ch)
+        return await base(q, log, chat=ch)
+    p, b, pg, log = await page_with(h, init=IOS_NOANCHOR)
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(800)
+    await pg.evaluate("window.scrollTo(0, document.body.scrollHeight); 0"); await pg.wait_for_timeout(100)
+    g0 = await pg.evaluate(GAP)
+    gs = await pg.evaluate("""(function(){ var ta = Array.prototype.slice.call(document.querySelectorAll("textarea[aria-label='草稿（可直接修改）']")).pop(), out = [];
+      for(var i = 0; i < 3; i++){ ta.value += '加'; ta.dispatchEvent(new Event('input')); void document.body.offsetHeight; out.push(%s); } return out; })()""" % GAP)
+    await done(p, b)
+    return g0 <= 2 and all(g <= 2 for g in gs), (g0, gs)
+
+
+async def t111():   # 點開「另外 N 輪沒有需要你回的」與某輪「點開的聊天室」⇒ 輪詢重畫後仍是點開的（舊版每輪收回、下面跟著往上縮）
+    st = {"day": "2026-10-24", "rounds": {
+        "10:00": {"at": "2026-10-24T10:00:00", "result": "done", "opened": [{"name": "甲"}], "drafts": []},
+        "11:00": {"at": "2026-10-24T11:00:00", "result": "done", "opened": [{"name": "乙"}, {"name": "丙"}],
+                  "drafts": [{"card_id": "c1", "chat": "丁", "draft": "稿"}]}}}
+    async def h(q, log):
+        if q.get("op") == "state": return dict(STATE, state=st, chat=[])
+        return await base(q, log, chat=[])
+    p, b, pg, log = await page_with(h, fast=True)
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(800)
+    await pg.evaluate("""document.querySelector('details.fold > summary').click();
+      Array.prototype.slice.call(document.querySelectorAll('details:not(.fold) > summary')).filter(function(s){ return s.textContent === '點開的聊天室（2）'; })[0].click(); 0""")   # 同一拍點兩下：輪詢每 60ms 重畫，Playwright 點擊會撞到元素被換掉
+    n0 = _states(log); await pg.wait_for_timeout(800); n1 = _states(log)
+    v = await pg.evaluate("""[document.querySelector('details.fold').open,
+      Array.prototype.slice.call(document.querySelectorAll('details:not(.fold)')).filter(function(d){ return !d.closest('.fold'); })[0].open,
+      document.querySelector('details.fold details').open]""")
+    await done(p, b)
+    return n1 - n0 >= 2 and v == [True, True, False], (n1 - n0, v)
+
+
+async def t112():   # 停在中間讀舊訊息（iPhone）⇒ 輪詢重畫後讀的位置不動
+    st, ch = _long_state()
+    async def h(q, log):
+        if q.get("op") == "state": return dict(STATE, state=st, chat=ch)
+        return await base(q, log, chat=ch)
+    p, b, pg, log = await page_with(h, fast=True, init=IOS_NOANCHOR)
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(800)
+    await pg.evaluate(FRAME_AFTER_RENDER)
+    await pg.evaluate("window.scrollTo(0, Math.round(document.body.scrollHeight / 2)); 0"); await pg.wait_for_timeout(100)
+    y0, n0 = await pg.evaluate("Math.round(window.scrollY)"), _states(log)
+    await pg.wait_for_timeout(1200)
+    y1, n1 = await pg.evaluate("Math.round(window.scrollY)"), _states(log)
+    await done(p, b)
+    return y0 > 0 and y0 == y1 and n1 - n0 >= 3, (y0, y1, n1 - n0)
+
+
+async def t113():   # 停在最底下時來了新回答 ⇒ 仍捲到最新那則（原有行為不得被這次修改弄掉）
+    st, ch = _long_state()
+    new = {"flag": False}
+    async def h(q, log):
+        c = ch + ([{"id": "bnew", "role": "bot", "text": "新來的回答\n第二行\n第三行", "at": "2026-10-24T19:00:00"}] if new["flag"] else [])
+        if q.get("op") == "state": return dict(STATE, state=st, chat=c)
+        return await base(q, log, chat=c)
+    p, b, pg, log = await page_with(h, fast=True, init=IOS_NOANCHOR)
+    await pg.goto("https://x.test/"); await pg.wait_for_timeout(800)
+    await pg.evaluate("window.scrollTo(0, document.body.scrollHeight); 0"); await pg.wait_for_timeout(100)
+    new["flag"] = True
+    await pg.wait_for_timeout(2000)
+    g, seen = await pg.evaluate(GAP), await pg.evaluate("document.getElementById('main').innerText.indexOf('新來的回答') >= 0")
+    await done(p, b)
+    return seen and g <= 2, (seen, g)
+
+
 MATRIX = [t01, t02, t03, t04, t05, t06, t07, t08, t09, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20,
           t21, t22, t23, t24, t25, t26, t27, t28, t29, t30, t31, t32, t33, t34, t35, t36, t37,
           t38, t39, t40, t41, t42, t43, t44, t45, t46, t47, t48, t49, t50, t51, t52, t53, t54, t55, t56, t57, t58, t59, t60, t61, t62, t63, t64,
           t65, t66, t67, t68, t69, t70, t71, t72, t73, t74, t75, t76, t77, t78, t79, t80, t81, t82, t83, t84, t85,
-          t86, t87, t88, t89, t90, t91, t92, t93, t94, t95, t96, t97, t98, t99, t100, t101, t102, t103, t104, t105, t106, t107, t108]
+          t86, t87, t88, t89, t90, t91, t92, t93, t94, t95, t96, t97, t98, t99, t100, t101, t102, t103, t104, t105, t106, t107, t108,
+          t109, t110, t111, t112, t113]
 EXISTING = [t_cid_reused_after_timeout, t_failure_keeps_new_draft_and_quote, t_stale_poll_does_not_drop_new_message,
             t_teach_menu_keeps_draft, t_teach_record_flow, t_teach_review_84b793d, t_teach_out_of_order, t_teach_stop_response_late, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
             t_fail_after_typing_keeps_draft_and_unsent_full, t_fail_untouched_keeps_whole_message,
