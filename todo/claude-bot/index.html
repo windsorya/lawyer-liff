@@ -350,7 +350,7 @@ function renderRound(m, key, r){
     box.appendChild(mu);
   }
   if(opened.length){
-    var det = keepOpen(el('details'), 'op:'+key); det.appendChild(el('summary',null,'點開的聊天室（'+opened.length+'）'));
+    var det = keepOpen(el('details'), 'op:'+(r.at||(DATA.state&&DATA.state.day)||'')+'|'+key); det.appendChild(el('summary',null,'點開的聊天室（'+opened.length+'）'));
     var ul = el('ul','bul'); opened.forEach(function(o){ ul.appendChild(el('li',null,o.name)); });
     det.appendChild(ul); box.appendChild(det);
   }
@@ -384,6 +384,7 @@ var IMG_H = {};   // 自己附的圖：記住上次畫出來的高度，重畫�
 function localImg(mi, url){
   var im = el('img'); im.alt = '你附的圖'; if(IMG_H[url]) mi.style.minHeight = IMG_H[url] + 'px';
   im.onload = function(){ if(im.offsetHeight) IMG_H[url] = im.offsetHeight; mi.style.minHeight = ''; };
+  im.onerror = function(){ delete IMG_H[url]; mi.style.minHeight = ''; };   // 載入失敗不留空白（Codex 審 ddde8ea ⑤）
   im.src = url; mi.appendChild(im);
 }
 
@@ -427,7 +428,7 @@ function renderChat(m){
   var quiet = keys.filter(function(k){ return !(st.rounds[k].drafts||[]).length && done(k); });
   var loud = keys.filter(function(k){ return quiet.indexOf(k) < 0; });
   if(quiet.length){
-    var det = keepOpen(el('details','fold'), 'fold');
+    var det = keepOpen(el('details','fold'), 'fold:'+(st.day||''));   // 鍵帶日期與輪次時間：隔天同一個 10:00 是新輪次，不得沿用昨天的點開（Codex 審 ddde8ea ④）
     var seen = quiet.reduce(function(a,k){ return a + ((st.rounds[k].opened||[]).length || st.rounds[k].opened_count || 0); }, 0);
     det.appendChild(el('summary',null,'另外 '+quiet.length+' 輪沒有需要你回的（共看了 '+seen+' 間）'));
     quiet.forEach(function(k){ renderRound(det, k, st.rounds[k]); });
@@ -807,7 +808,7 @@ function render(){
   var m = document.getElementById('main');
   m.style.minHeight = m.offsetHeight + 'px';   // 重畫期間整頁不准變矮（停在最底下才不會被往上夾）；畫完、草稿框撐好就放開
   rememberOpen(m);
-  try{ renderMain(m); } finally { fitAll(m); m.style.minHeight = ''; }
+  try{ renderMain(m); } finally { try{ fitAll(m); } finally { m.style.minHeight = ''; } }   // 撐框出錯也一定放開（Codex 審 ddde8ea ①）
 }
 function renderMain(m){
   m.textContent='';
