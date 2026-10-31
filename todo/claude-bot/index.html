@@ -534,7 +534,9 @@ function fillWork(m){
       // 活動條（不是完成度）：最近有新動作就流動、雲端沒收到回報或久無動作就變灰——一眼分辨施工中還是停了（設計者 ec1352 T09：不得用時間比例冒充完成比例）
       // 「停了沒」只有一個判準：條變灰＝文字說可能卡住（WORK_QUIET_S）。原本條 2 分鐘就灰、文字 8 分鐘才警示，
       // 等 Codex 審查／跑全套測試的正常 3–6 分鐘被灰條演成當機（10-25 02:12 律師截圖問「當機了嗎」，實查兩個施工程序都活著在等）
-      var lively = !stale && typeof x.idle_s === 'number' && x.idle_s + delay <= WORK_QUIET_S;
+      // 2026-11-01 #4481 T08 縮範圍：Mac 不再送 elapsed_s／idle_s（牆鐘相減會被改時間、睡眠騙成假停滯）。
+      // 「還在不在動」只看雲端有沒有持續收到 Mac 回報（stale）；舊版資料若仍帶 idle_s 也照舊判讀。
+      var lively = !stale && (typeof x.idle_s !== 'number' || x.idle_s + delay <= WORK_QUIET_S);
       bar.style.width = '100%'; bar.className = lively ? 'run' : 'idle';
       line = '施工中'+wkTries(x)
         +'・時間已用 '+(used === null ? '不明' : ago(used*1000))+(typeof x.timeout_min === 'number' ? '（每輪最長 '+x.timeout_min+' 分）' : '（每輪上限不明）');   // 缺欄＝不明，不補假數值也不默默省略（設計者 ec1352 C）
@@ -548,7 +550,8 @@ function fillWork(m){
       bar.style.width = '0%';
       if(typeof x.retry_in_s === 'number'){ var left = x.retry_in_s - delay;
         line = '暫停：'+(x.env_note||'額度用完或連不上網')+'，'+(left > 0 ? '約 '+ago(left*1000)+'後' : '稍後')+'自動再試'; }
-      else line = typeof x.ahead !== 'number' ? '排隊中：前面還有幾件不明' : x.ahead > 0 ? '排隊中：前面還有 '+x.ahead+' 件' : '排隊中：下一件就是它';
+      else line = (typeof x.ahead !== 'number' ? '排隊中：前面還有幾件不明' : x.ahead > 0 ? '排隊中：前面還有 '+x.ahead+' 件' : '排隊中：下一件就是它')
+        +(x.wait_note ? '（'+x.wait_note+'）' : '');   // #4481 T12：交辦單一次只做一件，排隊理由由 Mac 送 wait_note
     } else {
       bar.style.width = '100%'; bar.className = x.status === 'done' ? 'ok' : 'bad';
       var when = (typeof x.ago_s === 'number') ? ago((x.ago_s + delay)*1000)+'前' : '';
