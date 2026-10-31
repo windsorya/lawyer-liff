@@ -2268,12 +2268,28 @@ async def t117():   # #4481 T08/T12：Mac 不再送 idle_s ⇒ 雲端新鮮時�
     return ok, r
 
 
+async def t118():   # Codex 審 2c6e471b：無 idle_s 時手機讀不到雲端 ⇒ 不流動；wait_note 非字串不得清空進度區
+    import time
+    now_ms = int(time.time() * 1000)
+    w = {"at": "x", "rx": now_ms - 5000, "now": now_ms, "seq": now_ms, "items": [
+        {"id": "w1", "text": "施工中沒 idle", "status": "running", "tries": 1, "max_tries": 2, "steps": 7, "timeout_min": 45},
+        {"id": "w2", "text": "怪理由", "status": "queued", "ahead": 0, "wait_note": {"toString": None}}]}
+    p, b, pg = await _wk_page(None)
+    r = await pg.evaluate("a => { workObserve({ok: true, work: a}); WORK_FAIL_AT = mono() - 10*60*1000; WORK_OK_MONO = mono() - 10*60*1000;"
+                          " var bx = document.getElementById('wkbox'); bx.innerHTML = ''; fillWork(bx);"
+                          " var bar = document.querySelector('#wkbox .pb i');"
+                          " return {cls: bar ? bar.className : null, cards: document.querySelectorAll('#wkbox .wk').length, txt: %s}; }" % WK_TXT, w)
+    await done(p, b)
+    ok = r["cls"] == "idle" and r["cards"] >= 2 and "怪理由" in r["txt"]
+    return ok, r
+
+
 MATRIX = [t01, t02, t03, t04, t05, t06, t07, t08, t09, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20,
           t21, t22, t23, t24, t25, t26, t27, t28, t29, t30, t31, t32, t33, t34, t35, t36, t37,
           t38, t39, t40, t41, t42, t43, t44, t45, t46, t47, t48, t49, t50, t51, t52, t53, t54, t55, t56, t57, t58, t59, t60, t61, t62, t63, t64,
           t65, t66, t67, t68, t69, t70, t71, t72, t73, t74, t75, t76, t77, t78, t79, t80, t81, t82, t83, t84, t85,
           t86, t87, t88, t89, t90, t91, t92, t93, t94, t95, t96, t97, t98, t99, t100, t101, t102, t103, t104, t105, t106, t107, t108,
-          t109, t110, t111, t112, t113, t114, t115, t116, t117]
+          t109, t110, t111, t112, t113, t114, t115, t116, t117, t118]
 EXISTING = [t_cid_reused_after_timeout, t_failure_keeps_new_draft_and_quote, t_stale_poll_does_not_drop_new_message,
             t_teach_menu_keeps_draft, t_teach_record_flow, t_teach_review_84b793d, t_teach_out_of_order, t_teach_stop_response_late, t_layout_class_survives_quote_cancel, t_upload_does_not_eat_next_image_or_quote,
             t_fail_after_typing_keeps_draft_and_unsent_full, t_fail_untouched_keeps_whole_message,
